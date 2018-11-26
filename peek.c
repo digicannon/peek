@@ -61,11 +61,11 @@ static void cd(char * to) {
         d_current_name = malloc(sizeof(*d_current_name) * PATH_MAX);
         realpath(to, d_current_name);
     } else if (to[0] == '/') {
-	realpath(to, d_current_name);
+        realpath(to, d_current_name);
     } else {
-	char * new = append_to_cd(NULL, to);
-	realpath(new, d_current_name);
-	free(new);
+        char * new = append_to_cd(NULL, to);
+        realpath(new, d_current_name);
+        free(new);
     }
 
     d_current_len = strlen(d_current_name);
@@ -83,8 +83,8 @@ static void check_entry_selectable(struct dirent * ent) {
 
     // TODO: Readable check was wrong.  Do more research.
     selected_valid =
-	//(ent_stat.st_mode & S_IRGRP) && // Readable by user group?
-	S_ISDIR(ent_stat.st_mode);      // Is it a directory?
+        //(ent_stat.st_mode & S_IRGRP) && // Readable by user group?
+        S_ISDIR(ent_stat.st_mode);      // Is it a directory?
 }
 
 static int display_filter(const struct dirent * ent) {
@@ -119,29 +119,29 @@ static void display() {
     // If enabled, print current directory.
 
     if (cfg_show_dir) {
-	printf(COLOR_D_NAME "%s" COLOR_NORMAL ": ", d_current_name);
-	last_line_len = d_current_len + 2;
+        printf(COLOR_D_NAME "%s" COLOR_NORMAL ": ", d_current_name);
+        last_line_len = d_current_len + 2;
     }
-    
+
     // Now we can print the names of each entry.
 
     //while ((d_child = readdir(d_current)) != NULL) {
     for (int i = 0; i < d_length; ++i) {
-	d_child = d_children[i];
+        d_child = d_children[i];
 
         if (i == selected) {
-	    check_entry_selectable(d_child);
+            check_entry_selectable(d_child);
             last_line_len += printf("%s%s" COLOR_NORMAL " ",
-				    selected_valid ? COLOR_SELECT : COLOR_SELECT_INVALID,
-				    d_child->d_name);
-	    memcpy(selected_name, d_child->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
+                    selected_valid ? COLOR_SELECT : COLOR_SELECT_INVALID,
+                    d_child->d_name);
+            memcpy(selected_name, d_child->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
         } else {
             last_line_len += printf("%s%s" COLOR_NORMAL " ",
-				    d_child->d_type == DT_DIR ? COLOR_NORMAL : COLOR_NORMAL_INVALID,
-				    d_child->d_name);
+                    d_child->d_type == DT_DIR ? COLOR_NORMAL : COLOR_NORMAL_INVALID,
+                    d_child->d_name);
         }
 
-	free(d_child);
+        free(d_child);
     }
 
     free(d_children);
@@ -158,13 +158,13 @@ int open_selection() {
     pid = fork();
 
     if (pid > 0) {
-	return 0;
+        return 0;
     } else if (pid == 0) {
-	selected_path = append_to_cd(NULL, selected_name);
-	execl(opener, opener, selected_path, NULL);
-	CHECKBAD(1, 1, "%s failed to execute", opener);
+        selected_path = append_to_cd(NULL, selected_name);
+        execl(opener, opener, selected_path, NULL);
+        CHECKBAD(1, 1, "%s failed to execute", opener);
     } else {
-	CHECKBAD(1, 1, "Could not start process for %s", opener);
+        CHECKBAD(1, 1, "Could not start process for %s", opener);
     }
 }
 
@@ -193,26 +193,26 @@ redo:
     default: goto redo;
     case 'O':
     case 'o':
-	return open_selection();
+         return open_selection();
     case 'Q':
     case 'q':
     case 27: // ESC
-        if (getchar() != '[') return 0;
-        switch (getchar()) {
-        case 'A': // Up
-            cd("..");
-            break;
-        case 'B': // Down
-            if (selected_valid) cd(selected_name);
-            break;
-        case 'D': // Left
-            if (--selected < SELECTED_MIN) selected = SELECTED_MAX;
-            break;
-        case 'C': // Right
-            if (++selected > SELECTED_MAX) selected = SELECTED_MIN;
-            break;
-        }
-        break;
+         if (getchar() != '[') return 0;
+         switch (getchar()) {
+         case 'A': // Up
+             cd("..");
+             break;
+         case 'B': // Down
+             if (selected_valid) cd(selected_name);
+             break;
+         case 'D': // Left
+             if (--selected < SELECTED_MIN) selected = SELECTED_MAX;
+             break;
+         case 'C': // Right
+             if (++selected > SELECTED_MAX) selected = SELECTED_MIN;
+             break;
+         }
+         break;
     }
 
     display();
