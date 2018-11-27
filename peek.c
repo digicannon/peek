@@ -14,6 +14,8 @@
 #define COLOR_SELECT "\e[7m"
 #define COLOR_SELECT_INVALID "\e[7m\e[2m"
 
+#define MSG_EMPTY "empty"
+
 static char * d_current_name = NULL;
 static int d_current_len = 0; // Strlen of current dir name.
 static int d_length = 0;      // Number of entries in current dir.
@@ -102,10 +104,17 @@ static void display() {
 
     d_length = scandir(d_current_name, &d_children, display_filter, alphasort);
     CHECKBAD(d_length == -1, 1, "Could not scan %s", d_current_name);
+    // TODO: Just don't open if this happens.
 
     d_current = opendir(d_current_name);
     CHECKBAD(d_current == NULL, 1, "Could not open %s", d_current_name);
     d_current_fd = dirfd(d_current);
+
+    // Validate selection index.
+
+    if (d_length <= 0) selected = 0;
+    else if (selected < SELECTED_MIN) selected = SELECTED_MAX;
+    else if (selected > SELECTED_MAX) selected = SELECTED_MIN;
 
     // Erase last display call.
 
@@ -125,7 +134,10 @@ static void display() {
 
     // Now we can print the names of each entry.
 
-    //while ((d_child = readdir(d_current)) != NULL) {
+    if (d_length <= 0) {
+        last_line_len += printf(COLOR_NORMAL MSG_EMPTY COLOR_NORMAL " ");
+    }
+
     for (int i = 0; i < d_length; ++i) {
         d_child = d_children[i];
 
@@ -191,26 +203,35 @@ int main(int argc, char ** argv) {
 redo:
     switch (getchar()) {
     default: goto redo;
-    case 'O':
-    case 'o':
+    case 'O': case 'o': // Open
          return open_selection();
-    case 'Q':
-    case 'q':
+    case 'K': case 'k': // Back
+         cd(".."); break;
+    case 'J': case 'j': // Select
+    case '\n':
+         if (selected_valid) cd(selected_name);
+         break;
+    case 'H': case 'h': // Left
+         --selected; break;
+    case 'L': case 'l': // Right
+         ++selected; break;
+    case 'Q': case 'q': // Quit
+         return 0;
     case 27: // ESC
-         if (getchar() != '[') return 0;
+         if (getchar() != '[') return 0; // If just escape key, quit.
+
+         // Arrow key escape codes have to be handled seperately than
+         // the above handling of ASCII keys.
          switch (getchar()) {
-         case 'A': // Up
-             cd("..");
-             break;
-         case 'B': // Down
+         case 'A': // Back (Up)
+             cd(".."); break;
+         case 'B': // Select (Down)
              if (selected_valid) cd(selected_name);
              break;
          case 'D': // Left
-             if (--selected < SELECTED_MIN) selected = SELECTED_MAX;
-             break;
+             --selected; break;
          case 'C': // Right
-             if (++selected > SELECTED_MAX) selected = SELECTED_MIN;
-             break;
+             ++selected; break;
          }
          break;
     }
