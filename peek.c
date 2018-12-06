@@ -8,6 +8,14 @@
 #include <termios.h>
 #include <unistd.h>
 
+#ifndef DEBUG
+#ifndef RELEASE
+#define DEBUG 1
+#else
+#define DEBUG 0
+#endif
+#endif
+
 #define COLOR_D_NAME "\e[1m\e[7m"
 #define COLOR_NORMAL "\e[m"
 #define COLOR_NORMAL_INVALID "\e[m\e[2m"
@@ -34,9 +42,9 @@ static struct termios tcattr_old;
 static struct termios tcattr_raw;
 
 typedef char togglable;
-static togglable cfg_clear_trace = 1; // If unset, clear displayed text on exit.
-static togglable cfg_show_dir = 1; // Print current dir.
-static togglable cfg_show_dotfiles = 1; // If unset, file starting with . won't be shown.
+static togglable cfg_clear_trace = 1;   // If unset, clear displayed text on exit.
+static togglable cfg_show_dir = 0;      // Print current dir.
+static togglable cfg_show_dotfiles = 0; // If unset, file starting with . won't be shown.
 
 #define CHECKBAD(val, err, msg, ...) if (val) { putchar('\n'); fprintf(stderr, msg, __VA_ARGS__); exit(err); }
 
@@ -100,16 +108,14 @@ static void check_entry_selectable(struct dirent * ent) {
 
 static int display_filter(const struct dirent * ent) {
     if (ent->d_name[0] == '.') {
-	if (!cfg_show_dotfiles) return 0;
-	else if (ent->d_name[1] == 0) return 0; // Don't show "."
-	else if (ent->d_name[1] == '.' && ent->d_name[2] == 0) return 0; // Don't show ".."
+        if (!cfg_show_dotfiles) return 0;
+        else if (ent->d_name[1] == 0) return 0; // Don't show "."
+        else if (ent->d_name[1] == '.' && ent->d_name[2] == 0) return 0; // Don't show ".."
     }
     return 1;
 }
 
 static void display() {
-    static int last_line_len = 0;
-
     DIR * d_current;
     int d_current_fd;
     struct dirent ** d_children;
@@ -138,32 +144,32 @@ static void display() {
 
     if (cfg_show_dir) {
         printf(COLOR_D_NAME "%s" COLOR_NORMAL ": ", d_current_name);
-        last_line_len = d_current_len + 2;
     }
 
     // Now we can print the names of each entry.
 
     if (d_length <= 0) {
-        last_line_len += printf(COLOR_NORMAL MSG_EMPTY COLOR_NORMAL " ");
+        // The directory is empty.  Say so.
+        printf(COLOR_NORMAL MSG_EMPTY COLOR_NORMAL " ");
     }
 
     for (int i = 0; i < d_length; ++i) {
         d_child = d_children[i];
 
         if (i == selected) {
-	    // The selection is valid if it is a directory.
-	    // Print the selection with proper coloring, then
-	    // copy the name into the selected_name buffer.
+            // The selection is valid if it is a directory.
+            // Print the selection with proper coloring, then
+            // copy the name into the selected_name buffer.
 
             //check_entry_selectable(d_child);
-	    selected_valid = d_child->d_type == DT_DIR;
-            last_line_len += printf("%s%s" COLOR_NORMAL " ",
+            selected_valid = d_child->d_type == DT_DIR;
+            printf("%s%s" COLOR_NORMAL " ",
                     selected_valid ? COLOR_SELECT : COLOR_SELECT_INVALID,
                     d_child->d_name);
             memcpy(selected_name, d_child->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
         } else {
-	    // Just print the name with the color depending on if it is a directory.
-            last_line_len += printf("%s%s" COLOR_NORMAL " ",
+            // Just print the name with the color depending on if it is a directory.
+            printf("%s%s" COLOR_NORMAL " ",
                     d_child->d_type == DT_DIR ? COLOR_NORMAL : COLOR_NORMAL_INVALID,
                     d_child->d_name);
         }
@@ -192,7 +198,7 @@ int open_selection(char * opener, int do_fork) {
     }
 
     if (do_fork) {
-	printf("we're forking!");
+        printf("we're forking!");
         pid = fork();
 
         if (pid > 0) {
@@ -204,10 +210,10 @@ int open_selection(char * opener, int do_fork) {
             CHECKBAD(1, 1, "Could not start process for %s", opener);
         }
     } else {
-	restore_tcattr_old(); // atexit won't call this since we are overwriting this process.
-	if (cfg_clear_trace) putchar('\n'); // execv might stdout buffered before clear happens.
-	execv(opener, argv);
-	CHECKBAD(1, 1, "%s failed to execute", opener);
+        restore_tcattr_old(); // atexit won't call this since we are overwriting this process.
+        if (cfg_clear_trace) putchar('\n'); // execv might stdout buffered before clear happens.
+        execv(opener, argv);
+        CHECKBAD(1, 1, "%s failed to execute", opener);
     }
 }
 
@@ -228,7 +234,11 @@ int main(int argc, char ** argv) {
     tcattr_raw.c_cc[VTIME] = 0;
     tcattr_raw.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
-    printf("\e[2J\e[?25l\e[s"); // Hide cursor and save cursor location.
+    printf("\e[H");       // TEMP: Force to stop of screen.
+#if DEBUG
+    printf("Dev Build %s %s\e[K\n", __DATE__, __TIME__);
+#endif
+    printf("\e[?25l\e[s"); // Hide cursor and save cursor location.
 
     display();
 redo:
