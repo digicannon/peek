@@ -42,13 +42,14 @@ static struct termios tcattr_old;
 static struct termios tcattr_raw;
 
 typedef char togglable;
-static togglable cfg_clear_trace = 1;   // If unset, clear displayed text on exit.
-static togglable cfg_show_dir = 0;      // Print current dir.
-static togglable cfg_show_dotfiles = 0; // If unset, file starting with . won't be shown.
+static togglable cfg_show_dotfiles = 0; // (-a) If set, files starting with . will be shown.
+static togglable cfg_clear_trace   = 0; // (-c) If set, clear displayed text on exit.
+static togglable cfg_color         = 0; // (-C) If set, color output.
+static togglable cfg_show_dir      = 0; // (-d) If set, print current dir before listing.
 
 #define CHECKBAD(val, err, msg, ...) if (val) { putchar('\n'); fprintf(stderr, msg, __VA_ARGS__); exit(err); }
 
-static void restore_tcattr_old() {
+static void restore_tcattr() {
     printf("\e[?25h"); // Show cursor.
     if (cfg_clear_trace) printf("\e[u\e[0J\e[2K"); // Clear last display, see display().
     else                 putchar('\n');
@@ -210,7 +211,7 @@ int open_selection(char * opener, int do_fork) {
             CHECKBAD(1, 1, "Could not start process for %s", opener);
         }
     } else {
-        restore_tcattr_old(); // atexit won't call this since we are overwriting this process.
+        restore_tcattr(); // atexit won't call this since we are overwriting this process.
         if (cfg_clear_trace) putchar('\n'); // execv might stdout buffered before clear happens.
         execv(opener, argv);
         CHECKBAD(1, 1, "%s failed to execute", opener);
@@ -218,17 +219,29 @@ int open_selection(char * opener, int do_fork) {
 }
 
 int main(int argc, char ** argv) {
+    int flag;
+
     setlocale(LC_ALL, "");
 
-    // TODO: Read flags.
-    // TEMP: Usage: peek [dir]
-    if (argc == 1) cd(".");
-    else cd(argv[1]);
+    while ((flag = getopt(argc, argv, "acCdh")) != -1) { switch(flag) {
+    case 'a': cfg_show_dotfiles = 1; break;
+    case 'c': cfg_clear_trace   = 1; break;
+    case 'C': cfg_color         = 1; break;
+    case 'd': cfg_show_dir      = 1; break;
+    case 'h': printf("MSG_HELP\n"); return 0;
+    case '?': fprintf(stderr, "MSG_USAGE\n"); return 1;
+    default:
+        abort();
+    }}
+
+    // If there is a remaining argument, it is the directory to start in.
+    if (optind < argc) cd(argv[optind]);
+    else               cd(".");
 
     // Create raw terminal mode to stop stdin buffer from breaking key press detection.
     // http://pubs.opengroup.org/onlinepubs/000095399/basedefs/termios.h.html#tag_13_74_03_06
     tcgetattr(STDIN_FILENO, &tcattr_old);
-    atexit(restore_tcattr_old); // Restore old mode when we're done.
+    atexit(restore_tcattr); // Restore old mode when we're done.
     memcpy(&tcattr_raw, &tcattr_old, sizeof(struct termios));
     tcattr_raw.c_cc[VMIN]  = 0;
     tcattr_raw.c_cc[VTIME] = 0;
