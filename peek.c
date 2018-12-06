@@ -16,6 +16,9 @@
 
 #define MSG_EMPTY "empty"
 
+#define OPEN_IN_PROCESS 0
+#define OPEN_WITH_FORK  1
+
 static char * d_current_name = NULL;
 static int d_current_len = 0; // Strlen of current dir name.
 static int d_length = 0;      // Number of entries in current dir.
@@ -30,12 +33,18 @@ static char selected_valid = 0;
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
 
-static char cfg_show_dir = 1; // Print current dir.
+typedef char togglable;
+static togglable cfg_clear_trace = 1; // If unset, clear displayed text on exit.
+static togglable cfg_show_dir = 1; // Print current dir.
+static togglable cfg_show_dotfiles = 1; // If unset, file starting with . won't be shown.
 
 #define CHECKBAD(val, err, msg, ...) if (val) { putchar('\n'); fprintf(stderr, msg, __VA_ARGS__); exit(err); }
 
 static void restore_tcattr_old() {
-    printf("\e[?25h\n"); // Show cursor & newline for end of output.
+    printf("\e[?25h"); // Show cursor.
+    if (cfg_clear_trace) printf("\e[u\e[0J\e[2K"); // Clear last display, see display().
+    else                 putchar('\n');
+
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
 }
 
@@ -90,7 +99,11 @@ static void check_entry_selectable(struct dirent * ent) {
 }
 
 static int display_filter(const struct dirent * ent) {
-    if (ent->d_name[0] == '.') return 0;
+    if (ent->d_name[0] == '.') {
+	if (!cfg_show_dotfiles) return 0;
+	else if (ent->d_name[1] == 0) return 0; // Don't show "."
+	else if (ent->d_name[1] == '.' && ent->d_name[2] == 0) return 0; // Don't show ".."
+    }
     return 1;
 }
 
@@ -112,18 +125,14 @@ static void display() {
 
     // Validate selection index.
 
-    if (d_length <= 0) selected = 0;
+    if (d_length < 1) selected = 0;
     else if (selected < SELECTED_MIN) selected = SELECTED_MAX;
     else if (selected > SELECTED_MAX) selected = SELECTED_MIN;
 
-    // Erase last display call.
+    // Return to start of last display and erase previous.
+    // 0J erases below cursor, 2K erases to the right.
 
-    if (last_line_len == 0) printf("\e[s"); // Save start of output for overwrite later.
-    else                    printf("\e[u"); // Return to start of last display.
-
-    for (int i = 0; i < last_line_len; ++i) putchar(' ');
-    printf("\e[u");
-    last_line_len = 0;
+    printf("\e[u\e[0J\e[2K");
 
     // If enabled, print current directory.
 
@@ -142,12 +151,18 @@ static void display() {
         d_child = d_children[i];
 
         if (i == selected) {
-            check_entry_selectable(d_child);
+	    // The selection is valid if it is a directory.
+	    // Print the selection with proper coloring, then
+	    // copy the name into the selected_name buffer.
+
+            //check_entry_selectable(d_child);
+	    selected_valid = d_child->d_type == DT_DIR;
             last_line_len += printf("%s%s" COLOR_NORMAL " ",
                     selected_valid ? COLOR_SELECT : COLOR_SELECT_INVALID,
                     d_child->d_name);
             memcpy(selected_name, d_child->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
         } else {
+	    // Just print the name with the color depending on if it is a directory.
             last_line_len += printf("%s%s" COLOR_NORMAL " ",
                     d_child->d_type == DT_DIR ? COLOR_NORMAL : COLOR_NORMAL_INVALID,
                     d_child->d_name);
@@ -160,23 +175,39 @@ static void display() {
     closedir(d_current);
 }
 
-int open_selection() {
-    // TEMP: Hardcoded to open selection with /usr/bin/xdg-open.
-
-    char * opener = "/usr/bin/xdg-open";
+int open_selection(char * opener, int do_fork) {
+    char * argv[3] = {0};
     char * selected_path;
     pid_t pid;
 
-    pid = fork();
+    selected_path = append_to_cd(NULL, selected_name);
 
-    if (pid > 0) {
-        return 0;
-    } else if (pid == 0) {
-        selected_path = append_to_cd(NULL, selected_name);
-        execl(opener, opener, selected_path, NULL);
-        CHECKBAD(1, 1, "%s failed to execute", opener);
+    // If opener is null, then we are executing the selection, not "opening" it.
+    if (opener == NULL) {
+        opener  = selected_path;
+        argv[0] = selected_path;
     } else {
-        CHECKBAD(1, 1, "Could not start process for %s", opener);
+        argv[0] = opener;
+        argv[1] = selected_path;
+    }
+
+    if (do_fork) {
+	printf("we're forking!");
+        pid = fork();
+
+        if (pid > 0) {
+            return 0;
+        } else if (pid == 0) {
+            execv(opener, argv);
+            CHECKBAD(1, 1, "%s failed to execute", opener);
+        } else {
+            CHECKBAD(1, 1, "Could not start process for %s", opener);
+        }
+    } else {
+	restore_tcattr_old(); // atexit won't call this since we are overwriting this process.
+	if (cfg_clear_trace) putchar('\n'); // execv might stdout buffered before clear happens.
+	execv(opener, argv);
+	CHECKBAD(1, 1, "%s failed to execute", opener);
     }
 }
 
@@ -197,14 +228,18 @@ int main(int argc, char ** argv) {
     tcattr_raw.c_cc[VTIME] = 0;
     tcattr_raw.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
-    printf("\e[?25l"); // Hide cursor.
+    printf("\e[2J\e[?25l\e[s"); // Hide cursor and save cursor location.
 
     display();
 redo:
     switch (getchar()) {
     default: goto redo;
+    case 'E': case 'e': // Edit
+         return open_selection("/usr/bin/vim", OPEN_IN_PROCESS);
     case 'O': case 'o': // Open
-         return open_selection();
+         return open_selection("/usr/bin/xdg-open", OPEN_WITH_FORK);
+    case 'X': case 'x': // eXecute
+         return open_selection(NULL, OPEN_IN_PROCESS);
     case 'K': case 'k': // Back
          cd(".."); break;
     case 'J': case 'j': // Select
