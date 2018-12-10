@@ -40,8 +40,8 @@ static struct termios tcattr_old;
 static struct termios tcattr_raw;
 
 static char cfg_show_dotfiles = 0; // (-a) If set, files starting with . will be shown.
+static char cfg_color         = 1; // (-B) If set, color output.  -B unsets this.
 static char cfg_clear_trace   = 0; // (-c) If set, clear displayed text on exit.
-static char cfg_color         = 0; // (-C) If set, color output.
 static char cfg_show_dir      = 0; // (-d) If set, print current dir before listing.
 static char cfg_indicate      = 0; // (-F) If set, append indicators to entries.
 
@@ -198,7 +198,7 @@ static void display() {
         printf("%s", d_child->d_name);
         printf(COLOR_RESET);
         if (cfg_indicate && d_child_indicator) putchar(d_child_indicator);
-        putchar(' '); // TODO: Use tab sometimes.  Looks much better in /dev.
+        printf("  "); // TODO: Use tab sometimes.  Looks much better in /dev.
 
         free(d_child);
     }
@@ -247,10 +247,10 @@ int main(int argc, char ** argv) {
 
     setlocale(LC_ALL, "");
 
-    while ((flag = getopt(argc, argv, "acCdFh")) != -1) { switch(flag) {
+    while ((flag = getopt(argc, argv, "aBcdFh")) != -1) { switch(flag) {
     case 'a': cfg_show_dotfiles = 1; break;
+    case 'B': cfg_color         = 0; break;
     case 'c': cfg_clear_trace   = 1; break;
-    case 'C': cfg_color         = 1; break;
     case 'd': cfg_show_dir      = 1; break;
     case 'F': cfg_indicate      = 1; break;
     case 'h': printf("MSG_HELP\n"); return 0;
@@ -287,7 +287,7 @@ redo:
          return open_selection("/usr/bin/xdg-open", OPEN_WITH_FORK);
     case 'X': case 'x': // eXecute
          return open_selection(NULL, OPEN_IN_PROCESS);
-    case 'K': case 'k': // Back
+    case 'K': case 'k': // Select Parent
          cd(".."); break;
     case 'J': case 'j': // Select
     case '\n':
@@ -305,7 +305,7 @@ redo:
          // Arrow key escape codes have to be handled seperately than
          // the above handling of ASCII keys.
          switch (getchar()) {
-         case 'A': // Back (Up)
+         case 'A': // Select Parent (Up)
              cd(".."); break;
          case 'B': // Select (Down)
              if (selected_valid) cd(selected_name);
