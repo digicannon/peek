@@ -16,11 +16,9 @@
 #endif
 #endif
 
-#define COLOR_D_NAME "\e[1m\e[7m"
-#define COLOR_NORMAL "\e[m"
-#define COLOR_NORMAL_INVALID "\e[m\e[2m"
-#define COLOR_SELECT "\e[7m"
-#define COLOR_SELECT_INVALID "\e[7m\e[2m"
+#define COLOR_RESET  "\e[m"
+#define COLOR_BOLD   "\e[1m"
+#define COLOR_INVERT "\e[7m"
 
 #define MSG_EMPTY "empty"
 
@@ -41,11 +39,11 @@ static char selected_valid = 0;
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
 
-typedef char togglable;
-static togglable cfg_show_dotfiles = 0; // (-a) If set, files starting with . will be shown.
-static togglable cfg_clear_trace   = 0; // (-c) If set, clear displayed text on exit.
-static togglable cfg_color         = 0; // (-C) If set, color output.
-static togglable cfg_show_dir      = 0; // (-d) If set, print current dir before listing.
+static char cfg_show_dotfiles = 0; // (-a) If set, files starting with . will be shown.
+static char cfg_clear_trace   = 0; // (-c) If set, clear displayed text on exit.
+static char cfg_color         = 0; // (-C) If set, color output.
+static char cfg_show_dir      = 0; // (-d) If set, print current dir before listing.
+static char cfg_indicate      = 0; // (-F) If set, append indicators to entries.
 
 #define CHECKBAD(val, err, msg, ...) if (val) { putchar('\n'); fprintf(stderr, msg, __VA_ARGS__); exit(err); }
 
@@ -93,18 +91,40 @@ static void cd(char * to) {
     selected = SELECTED_MIN;
 }
 
-static void check_entry_selectable(struct dirent * ent) {
-    struct stat ent_stat;
-    char * ent_path;
+static void get_entry_type(struct dirent * ent, const char ** color, char * indicator) {
+    static const char * colors[] = {
+        0,          // DT_UNKNOWN
+        "\e[33m",   // DT_FIFO
+        "\e[33;1m", // DT_CHR
+        0,
+        "\e[34;1m", // DT_DIR
+        0,
+        "\e[33;1m", // DT_BLK
+        0,
+        0,          // DT_REG
+        0,
+        "\e[36;1m", // DT_LNK
+        0,
+        "\e[35;1m", // DT_SOCK
+    };
+    static const char indicators[] = "\0|\0\0/\0\0\0\0\0@\0=";
 
-    ent_path = append_to_cd(NULL, ent->d_name);
-    CHECKBAD(lstat(ent_path, &ent_stat), 1, "Could not lstat %s", ent->d_name);
-    free(ent_path);
-
-    // TODO: Readable check was wrong.  Do more research.
-    selected_valid =
-        //(ent_stat.st_mode & S_IRGRP) && // Readable by user group?
-        S_ISDIR(ent_stat.st_mode);      // Is it a directory?
+    if (ent->d_type > 0 && ent->d_type <= DT_SOCK
+            && (colors[ent->d_type] || indicators[ent->d_type])) {
+        *color     = colors[ent->d_type];
+        *indicator = indicators[ent->d_type];
+    } else {
+        // d_type couldn't tell us anything, so check if executable.
+        char * ent_path = append_to_cd(NULL, ent->d_name);
+        if (access(ent_path, X_OK) == 0) {
+            *color     = "\e[32;1m";
+            *indicator = '*';
+        } else {
+            *color     = 0;
+            *indicator = 0;
+        }
+        free(ent_path);
+    }
 }
 
 static int display_filter(const struct dirent * ent) {
@@ -121,6 +141,8 @@ static void display() {
     int d_current_fd;
     struct dirent ** d_children;
     struct dirent * d_child;
+    const char * d_child_color;
+    char d_child_indicator;
 
     d_length = scandir(d_current_name, &d_children, display_filter, alphasort);
     CHECKBAD(d_length == -1, 1, "Could not scan %s", d_current_name);
@@ -144,36 +166,39 @@ static void display() {
     // If enabled, print current directory.
 
     if (cfg_show_dir) {
-        printf(COLOR_D_NAME "%s" COLOR_NORMAL ": ", d_current_name);
+        printf(COLOR_BOLD COLOR_INVERT "%s" COLOR_RESET ": ", d_current_name);
     }
 
     // Now we can print the names of each entry.
 
+    printf(COLOR_RESET);
+
     if (d_length <= 0) {
         // The directory is empty.  Say so.
-        printf(COLOR_NORMAL MSG_EMPTY COLOR_NORMAL " ");
+        printf(MSG_EMPTY COLOR_RESET " ");
     }
 
     for (int i = 0; i < d_length; ++i) {
         d_child = d_children[i];
+        get_entry_type(d_child, &d_child_color, &d_child_indicator);
 
         if (i == selected) {
-            // The selection is valid if it is a directory.
-            // Print the selection with proper coloring, then
-            // copy the name into the selected_name buffer.
+            // Set the selection as valid if it is a directory.
+            // Copy the name into the selected_name buffer.
 
-            //check_entry_selectable(d_child);
             selected_valid = d_child->d_type == DT_DIR;
-            printf("%s%s" COLOR_NORMAL " ",
-                    selected_valid ? COLOR_SELECT : COLOR_SELECT_INVALID,
-                    d_child->d_name);
             memcpy(selected_name, d_child->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
-        } else {
-            // Just print the name with the color depending on if it is a directory.
-            printf("%s%s" COLOR_NORMAL " ",
-                    d_child->d_type == DT_DIR ? COLOR_NORMAL : COLOR_NORMAL_INVALID,
-                    d_child->d_name);
+            printf(COLOR_INVERT);
         }
+
+        // Print color if enabled, then the name.  Reset format.
+        // Then print indicator if enabled, then a space.
+
+        if (cfg_color && d_child_color) printf("%s", d_child_color);
+        printf("%s", d_child->d_name);
+        printf(COLOR_RESET);
+        if (cfg_indicate && d_child_indicator) putchar(d_child_indicator);
+        putchar(' '); // TODO: Use tab sometimes.  Looks much better in /dev.
 
         free(d_child);
     }
@@ -182,7 +207,7 @@ static void display() {
     closedir(d_current);
 }
 
-int open_selection(char * opener, int do_fork) {
+static int open_selection(char * opener, int do_fork) {
     char * argv[3] = {0};
     char * selected_path;
     pid_t pid;
@@ -199,7 +224,6 @@ int open_selection(char * opener, int do_fork) {
     }
 
     if (do_fork) {
-        printf("we're forking!");
         pid = fork();
 
         if (pid > 0) {
@@ -223,15 +247,15 @@ int main(int argc, char ** argv) {
 
     setlocale(LC_ALL, "");
 
-    while ((flag = getopt(argc, argv, "acCdh")) != -1) { switch(flag) {
+    while ((flag = getopt(argc, argv, "acCdFh")) != -1) { switch(flag) {
     case 'a': cfg_show_dotfiles = 1; break;
     case 'c': cfg_clear_trace   = 1; break;
     case 'C': cfg_color         = 1; break;
     case 'd': cfg_show_dir      = 1; break;
+    case 'F': cfg_indicate      = 1; break;
     case 'h': printf("MSG_HELP\n"); return 0;
     case '?': fprintf(stderr, "MSG_USAGE\n"); return 1;
-    default:
-        abort();
+    default: abort();
     }}
 
     // If there is a remaining argument, it is the directory to start in.
@@ -247,7 +271,7 @@ int main(int argc, char ** argv) {
     tcattr_raw.c_cc[VTIME] = 0;
     tcattr_raw.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
-    printf("\e[H");       // TEMP: Force to stop of screen.
+    printf("\e[H"); // TEMP: Force to stop of screen.
 #if DEBUG
     printf("Dev Build %s %s\e[K\n", __DATE__, __TIME__);
 #endif
