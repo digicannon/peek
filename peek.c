@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <dirent.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
@@ -39,6 +40,8 @@ static char selected_valid = 0;
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
 
+static int last_overflow_count = 0; // Number of lines overflowed by last display.
+
 static char cfg_show_dotfiles = 0; // (-a) If set, files starting with . will be shown.
 static char cfg_color         = 1; // (-B) If set, color output.  -B unsets this.
 static char cfg_clear_trace   = 0; // (-c) If set, clear displayed text on exit.
@@ -50,7 +53,7 @@ static char cfg_indicate      = 0; // (-F) If set, append indicators to entries.
 static void restore_tcattr() {
     printf("\e[?25h"); // Show cursor.
     if (cfg_clear_trace) printf("\e[u\e[0J\e[2K"); // Clear last display, see display().
-    else                 putchar('\n');
+    else for (int l = 0; l <= last_overflow_count; ++l) putchar('\n');
 
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
 }
@@ -136,13 +139,24 @@ static int display_filter(const struct dirent * ent) {
     return 1;
 }
 
+static void get_cursor_pos(int * row, int * col) {
+    printf("\e[6n");
+    scanf("\e[%d;%dR", row, col);
+}
+
 static void display() {
+    struct winsize termsize;
+    int print_count = 0;
+    int row_before, col_before;
+    int row_after,  col_after;
     DIR * d_current;
     int d_current_fd;
     struct dirent ** d_children;
     struct dirent * d_child;
     const char * d_child_color;
     char d_child_indicator;
+
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &termsize);
 
     d_length = scandir(d_current_name, &d_children, display_filter, alphasort);
     CHECKBAD(d_length == -1, 1, "Could not scan %s", d_current_name);
@@ -162,11 +176,12 @@ static void display() {
     // 0J erases below cursor, 2K erases to the right.
 
     printf("\e[u\e[0J\e[2K");
+    get_cursor_pos(&row_before, &col_before);
 
     // If enabled, print current directory.
 
     if (cfg_show_dir) {
-        printf(COLOR_BOLD COLOR_INVERT "%s" COLOR_RESET ": ", d_current_name);
+        print_count += printf(COLOR_BOLD COLOR_INVERT "%s" COLOR_RESET ": ", d_current_name);
     }
 
     // Now we can print the names of each entry.
@@ -175,7 +190,7 @@ static void display() {
 
     if (d_length <= 0) {
         // The directory is empty.  Say so.
-        printf(MSG_EMPTY COLOR_RESET " ");
+        print_count += printf(MSG_EMPTY COLOR_RESET " ");
     }
 
     for (int i = 0; i < d_length; ++i) {
@@ -195,16 +210,26 @@ static void display() {
         // Then print indicator if enabled, then a space.
 
         if (cfg_color && d_child_color) printf("%s", d_child_color);
-        printf("%s", d_child->d_name);
+        print_count += printf("%s", d_child->d_name);
         printf(COLOR_RESET);
         if (cfg_indicate && d_child_indicator) putchar(d_child_indicator);
-        printf("  "); // TODO: Use tab sometimes.  Looks much better in /dev.
+        print_count += printf("  "); // TODO: Use tab sometimes.  Looks much better in /dev.
 
         free(d_child);
     }
 
     free(d_children);
     closedir(d_current);
+
+    // If the lines overflowed does not match the difference in cursor height,
+    // the terminal scrolled and we need to adjust the saved position.
+
+    get_cursor_pos(&row_after, &col_after);
+    last_overflow_count = print_count / termsize.ws_col;
+    if (last_overflow_count) {
+        // Move cursor up to adjust for overflow and save it.
+        printf("\e[%d;%df\e[s", row_after - last_overflow_count, col_before);
+    }
 }
 
 static int open_selection(char * opener, int do_fork) {
@@ -271,7 +296,6 @@ int main(int argc, char ** argv) {
     tcattr_raw.c_cc[VTIME] = 0;
     tcattr_raw.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
-    printf("\e[H"); // TEMP: Force to stop of screen.
 #if DEBUG
     printf("Dev Build %s %s\e[K\n", __DATE__, __TIME__);
 #endif
