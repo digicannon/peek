@@ -21,7 +21,27 @@
 #define COLOR_BOLD   "\e[1m"
 #define COLOR_INVERT "\e[7m"
 
-#define MSG_EMPTY "empty"
+#define SHORT_FLAGS "aBcdFh"
+#define MSG_USAGE   "Usage: %s [-" SHORT_FLAGS "] [<directory>]"
+#define MSG_INVALID MSG_USAGE "\nTry '%s -h' for more information.\n"
+#define MSG_HELP    MSG_USAGE "\nInteractive exploration of directories on the command line.\n" \
+                    "\nFlags:\n" \
+                    "  -a\tShow files starting with . (hidden by default)\n" \
+                    "  -B\tDon't output color.\n" \
+                    "  -c\tClear listing on exit.\n" \
+                    "  -d\tPrint current directory path before listing.\n" \
+                    "  -F\tAppend ls style indicators to the end of entries.\n" \
+                    "  -h\tPrint this message and exit.\n" \
+                    "\nKeys:\n" \
+                    "   E\tEdit selected entry.\n" \
+                    "   O\tOpen selected entry.\n" \
+                    "   X\tExecute selected entry.\n" \
+                    "   Q\tQuit.\n" \
+                    "   K|Up           Go up a directory.\n" \
+                    "   J|Down|Enter   Open selected directory.\n" \
+                    "   H|Left         Move selection left.\n" \
+                    "   L|Right        Move selection right.\n"
+#define MSG_EMPTY   "empty"
 
 #define OPEN_IN_PROCESS 0
 #define OPEN_WITH_FORK  1
@@ -272,14 +292,14 @@ int main(int argc, char ** argv) {
 
     setlocale(LC_ALL, "");
 
-    while ((flag = getopt(argc, argv, "aBcdFh")) != -1) { switch(flag) {
+    while ((flag = getopt(argc, argv, SHORT_FLAGS)) != -1) { switch(flag) {
     case 'a': cfg_show_dotfiles = 1; break;
     case 'B': cfg_color         = 0; break;
     case 'c': cfg_clear_trace   = 1; break;
     case 'd': cfg_show_dir      = 1; break;
     case 'F': cfg_indicate      = 1; break;
-    case 'h': printf("MSG_HELP\n"); return 0;
-    case '?': fprintf(stderr, "MSG_USAGE\n"); return 1;
+    case 'h': printf(MSG_HELP, argv[0]); return 0;
+    case '?': fprintf(stderr, MSG_INVALID, argv[0], argv[0]); return 1;
     default: abort();
     }}
 
