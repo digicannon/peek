@@ -159,9 +159,34 @@ static int display_filter(const struct dirent * ent) {
     return 1;
 }
 
+// Note: This will eat everything in stdin.
 static void get_cursor_pos(int * row, int * col) {
+    int ahead = 0;
+    char c;
+
+    *row = 0;
+    *col = 0;
+
+    // Attempt to clear out stdin.
+    // CLEANUP: Is read with a NULL buffer really allowed?
+    ioctl(STDIN_FILENO, FIONREAD, &ahead);
+    read(STDIN_FILENO, NULL, ahead);
+
+    // Request cursor position and scan for the response "\e[%d;%dR".
+    // If we read in something that started out correct and became malformed,
+    // it isn't the cursor position response so start over.
     printf("\e[6n");
-    scanf("\e[%d;%dR", row, col);
+scan_for_esc:
+    while (getchar() != 0x1B);               // Scan for escape.
+    if (getchar() != '[') goto scan_for_esc; // Scan for [
+    while ((c = getchar()) != ';') {         // Scan for %d;
+        if (c < '0' || c > '9') goto scan_for_esc;
+        *row = (*row * 10) + (c - '0');
+    }
+    while ((c = getchar()) != 'R') {         // Scan for %dR
+        if (c < '0' || c > '9') goto scan_for_esc;
+        *col = (*col * 10) + (c - '0');
+    }
 }
 
 static void display() {
@@ -343,7 +368,7 @@ redo:
          ++selected; break;
     case 'Q': case 'q': // Quit
          return 0;
-    case 27: // ESC
+    case 0x1B: // ESC
          if (getchar() != '[') return 0; // If just escape key, quit.
 
          // Arrow key escape codes have to be handled seperately than
