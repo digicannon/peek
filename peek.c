@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,7 +22,7 @@
 #define COLOR_BOLD   "\e[1m"
 #define COLOR_INVERT "\e[7m"
 
-#define SHORT_FLAGS "aBcdFh"
+#define SHORT_FLAGS "aBcdFhx"
 #define MSG_USAGE   "Usage: %s [-" SHORT_FLAGS "] [<directory>]"
 #define MSG_INVALID MSG_USAGE "\nTry '%s -h' for more information.\n"
 #define MSG_HELP    MSG_USAGE "\nInteractive exploration of directories on the command line.\n" \
@@ -32,6 +33,7 @@
                     "  -d\tPrint current directory path before listing.\n" \
                     "  -F\tAppend ls style indicators to the end of entries.\n" \
                     "  -h\tPrint this message and exit.\n" \
+                    "  -x\tPrint unprintable characters as hex.  Carriage return would be /0D/.\n" \
                     "\nKeys:\n" \
                     "   E\tEdit selected entry.\n" \
                     "   O\tOpen selected entry.\n" \
@@ -42,6 +44,8 @@
                     "   H|Left         Move selection left.\n" \
                     "   L|Right        Move selection right.\n"
 #define MSG_EMPTY   "empty"
+
+#define ENTRY_DELIM "  "
 
 #define OPEN_IN_PROCESS 0
 #define OPEN_WITH_FORK  1
@@ -67,7 +71,9 @@ static char cfg_color         = 1; // (-B) If set, color output.  -B unsets this
 static char cfg_clear_trace   = 0; // (-c) If set, clear displayed text on exit.
 static char cfg_show_dir      = 0; // (-d) If set, print current dir before listing.
 static char cfg_indicate      = 0; // (-F) If set, append indicators to entries.
+static char cfg_print_hex     = 0; // (-x) If set, print unprintable characters as hex.
 
+// TEMP:
 #define CHECKBAD(val, err, msg, ...) if (val) { putchar('\n'); fprintf(stderr, msg, __VA_ARGS__); exit(err); }
 
 static void restore_tcattr() {
@@ -159,7 +165,7 @@ static int display_filter(const struct dirent * ent) {
     return 1;
 }
 
-// Note: This will eat everything in stdin.
+// NOTE: This will eat everything in stdin.
 static void get_cursor_pos(int * row, int * col) {
     int ahead = 0;
     char c;
@@ -192,12 +198,14 @@ scan_for_esc:
 static void display() {
     struct winsize termsize;
     int print_count = 0;
+    int newline_count = 0;
     int row_before, col_before;
     int row_after,  col_after;
     DIR * d_current;
     int d_current_fd;
     struct dirent ** d_children;
     struct dirent * d_child;
+    int d_child_len;
     const char * d_child_color;
     char d_child_indicator;
 
@@ -240,6 +248,7 @@ static void display() {
 
     for (int i = 0; i < d_length; ++i) {
         d_child = d_children[i];
+        d_child_len = strlen(d_child->d_name);
         get_entry_type(d_child, &d_child_color, &d_child_indicator);
 
         if (i == selected) {
@@ -251,14 +260,40 @@ static void display() {
             printf(COLOR_INVERT);
         }
 
-        // Print color if enabled, then the name.  Reset format.
-        // Then print indicator if enabled, then a space.
+        // Time to print this entry.
 
+        // If enabled, print the corresponding color for the type.
         if (cfg_color && d_child_color) printf("%s", d_child_color);
-        print_count += printf("%s", d_child->d_name);
+
+        // If this entry would line wrap, print a newline.
+        // +1 for indicator.
+        if (print_count + d_child_len + strlen(ENTRY_DELIM) + 1 >= termsize.ws_col) {
+            putchar('\n');
+            ++newline_count;
+            print_count = 0;
+        }
+
+        // Print the name of the entry.
+        for (unsigned char * c = d_child->d_name; *c; ++c) {
+            // This character is printable if
+            // it is above control characters and not DEL.
+            if (*c > 0x1F && *c != 0x7F) {
+                putchar(*c);
+                ++print_count;
+            } else if (cfg_print_hex) {
+                print_count += printf("/%02X/", (unsigned char)*c);
+            }
+        }
+
         printf(COLOR_RESET);
-        if (cfg_indicate && d_child_indicator) putchar(d_child_indicator);
-        print_count += printf("  "); // TODO: Use tab sometimes.  Looks much better in /dev.
+
+        // If enabled, print the corresponding indicator for the type.
+        if (cfg_indicate && d_child_indicator) {
+            putchar(d_child_indicator);
+            ++print_count;
+        }
+
+        print_count += printf(ENTRY_DELIM);
 
         free(d_child);
     }
@@ -270,6 +305,7 @@ static void display() {
     // the terminal scrolled and we need to adjust the saved position.
 
     get_cursor_pos(&row_after, &col_after);
+    print_count = print_count + newline_count * termsize.ws_col;
     last_overflow_count = print_count / termsize.ws_col;
     if (last_overflow_count) {
         // Move cursor up to adjust for overflow and save it.
@@ -323,6 +359,7 @@ int main(int argc, char ** argv) {
     case 'c': cfg_clear_trace   = 1; break;
     case 'd': cfg_show_dir      = 1; break;
     case 'F': cfg_indicate      = 1; break;
+    case 'x': cfg_print_hex     = 1; break;
     case 'h': printf(MSG_HELP, argv[0]); return 0;
     case '?': fprintf(stderr, MSG_INVALID, argv[0], argv[0]); return 1;
     default: abort();
