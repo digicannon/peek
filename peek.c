@@ -185,12 +185,16 @@ static void get_cursor_pos(int * row, int * col) {
 scan_for_esc:
     while (getchar() != 0x1B);               // Scan for escape.
     if (getchar() != '[') goto scan_for_esc; // Scan for [
-    while ((c = getchar()) != ';') {         // Scan for %d;
-        if (c < '0' || c > '9') goto scan_for_esc;
+    while (1) {                              // Scan for %d;
+        c = getchar();
+        if (c == ';') break;
+        else if (c < '0' || c > '9') goto scan_for_esc;
         *row = (*row * 10) + (c - '0');
     }
-    while ((c = getchar()) != 'R') {         // Scan for %dR
-        if (c < '0' || c > '9') goto scan_for_esc;
+    while (1) {                              // Scan for %dR
+        c = getchar();
+        if (c == 'R') break;
+        else if (c < '0' || c > '9') goto scan_for_esc;
         *col = (*col * 10) + (c - '0');
     }
 }
