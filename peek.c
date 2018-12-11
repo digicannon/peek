@@ -43,7 +43,8 @@
                     "   J|Down|Enter   Open selected directory.\n" \
                     "   H|Left         Move selection left.\n" \
                     "   L|Right        Move selection right.\n"
-#define MSG_EMPTY   "empty"
+#define MSG_CANT_SCAN "/could not scan/"
+#define MSG_EMPTY     "/empty/"
 
 #define ENTRY_DELIM "  "
 
@@ -59,7 +60,6 @@ static int d_length = 0;      // Number of entries in current dir.
 static int selected = SELECTED_MIN;
 #define SELECTED_MAXLEN 256
 static char selected_name[SELECTED_MAXLEN];
-static char selected_valid = 0;
 
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
@@ -205,8 +205,7 @@ static void display() {
     int newline_count = 0;
     int row_before, col_before;
     int row_after,  col_after;
-    DIR * d_current;
-    int d_current_fd;
+    DIR * d_current = NULL;
     struct dirent ** d_children;
     struct dirent * d_child;
     int d_child_len;
@@ -216,12 +215,12 @@ static void display() {
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &termsize);
 
     d_length = scandir(d_current_name, &d_children, display_filter, alphasort);
-    CHECKBAD(d_length == -1, 1, "Could not scan %s", d_current_name);
-    // TODO: Just don't open if this happens.
+    if (d_length == -1) {
+        selected_name[0] = 0;
+    }
 
     d_current = opendir(d_current_name);
     CHECKBAD(d_current == NULL, 1, "Could not open %s", d_current_name);
-    d_current_fd = dirfd(d_current);
 
     // Validate selection index.
 
@@ -245,7 +244,10 @@ static void display() {
 
     printf(COLOR_RESET);
 
-    if (d_length <= 0) {
+    if (d_length < 0) {
+        // The directory couldn't be opened.  Say so.
+        print_count += printf(MSG_CANT_SCAN COLOR_RESET " ");
+    } else if (d_length == 0) {
         // The directory is empty.  Say so.
         print_count += printf(MSG_EMPTY COLOR_RESET " ");
     }
@@ -259,7 +261,6 @@ static void display() {
             // Set the selection as valid if it is a directory.
             // Copy the name into the selected_name buffer.
 
-            selected_valid = d_child->d_type == DT_DIR;
             memcpy(selected_name, d_child->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
             printf(COLOR_INVERT);
         }
@@ -278,7 +279,7 @@ static void display() {
         }
 
         // Print the name of the entry.
-        for (unsigned char * c = d_child->d_name; *c; ++c) {
+        for (unsigned char * c = (unsigned char *)d_child->d_name; *c; ++c) {
             // This character is printable if
             // it is above control characters and not DEL.
             if (*c > 0x1F && *c != 0x7F) {
@@ -302,7 +303,7 @@ static void display() {
         free(d_child);
     }
 
-    free(d_children);
+    if (d_children) free(d_children);
     closedir(d_current);
 
     // If the lines overflowed does not match the difference in cursor height,
@@ -401,8 +402,7 @@ redo:
          cd(".."); break;
     case 'J': case 'j': // Select
     case '\n':
-         if (selected_valid) cd(selected_name);
-         break;
+         cd(selected_name); break;
     case 'H': case 'h': // Left
          --selected; break;
     case 'L': case 'l': // Right
@@ -418,8 +418,7 @@ redo:
          case 'A': // Select Parent (Up)
              cd(".."); break;
          case 'B': // Select (Down)
-             if (selected_valid) cd(selected_name);
-             break;
+             cd(selected_name); break;
          case 'D': // Left
              --selected; break;
          case 'C': // Right
