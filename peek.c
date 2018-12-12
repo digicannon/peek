@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <errno.h>
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +55,7 @@
 static char * d_current_name = NULL;
 static int d_current_len = 0; // Strlen of current dir name.
 static int d_length = 0;      // Number of entries in current dir.
+struct dirent ** d_children = NULL;
 
 #define SELECTED_MIN 0
 #define SELECTED_MAX (d_length - 1)
@@ -84,9 +86,19 @@ static void restore_tcattr() {
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
 }
 
+static int display_filter(const struct dirent * ent) {
+    if (ent->d_name[0] == '.') {
+        if (!cfg_show_dotfiles) return 0;
+        else if (ent->d_name[1] == 0) return 0; // Don't show "."
+        else if (ent->d_name[1] == '.' && ent->d_name[2] == 0) return 0; // Don't show ".."
+    }
+    return 1;
+}
+
 // If to, the current directory string being appended, is NULL,
 // exact space is allocated and d_current_name is copied.
 // Returns to, whether that be the original or a result of the above condition.
+// NOTE: If not NULL, to must be a copy of to.
 static char * append_to_cd(char * to, char * suffix) {
     size_t suffix_len = strlen(suffix);
     size_t to_len = d_current_len + suffix_len + 2;
@@ -103,7 +115,23 @@ static char * append_to_cd(char * to, char * suffix) {
     return to;
 }
 
-static void cd(char * to) {
+static void run_scan() {
+    d_length = scandir(d_current_name, &d_children, display_filter, alphasort);
+    if (d_length == -1) {
+        selected_name[0] = 0;
+    }
+}
+
+// TODO: Replace realpath.  We shouldn't be resolving symlinks.
+static char cd(char * to) {
+    char * old_path;
+    
+    if (d_current_name) {
+        // Only provide fallback if this is not the initial path.
+        old_path = malloc(sizeof(*old_path) * PATH_MAX);
+        memcpy(old_path, d_current_name, sizeof(*old_path) * PATH_MAX);
+    }
+
     if (d_current_name == NULL) {
         d_current_name = malloc(sizeof(*d_current_name) * PATH_MAX);
         realpath(to, d_current_name);
@@ -115,9 +143,19 @@ static void cd(char * to) {
         free(new);
     }
 
+    run_scan();
+    if (d_length == -1) {
+        // This "directory" (could be a file or something) failed to scan.
+        // Restore old file path.
+        free(d_current_name);
+        d_current_name = old_path;
+        return 0;
+    }
+    free(old_path);
+
     d_current_len = strlen(d_current_name);
-    d_length = 0;
     selected = SELECTED_MIN;
+    return 1;
 }
 
 static void get_entry_type(struct dirent * ent, const char ** color, char * indicator) {
@@ -154,15 +192,6 @@ static void get_entry_type(struct dirent * ent, const char ** color, char * indi
         }
         free(ent_path);
     }
-}
-
-static int display_filter(const struct dirent * ent) {
-    if (ent->d_name[0] == '.') {
-        if (!cfg_show_dotfiles) return 0;
-        else if (ent->d_name[1] == 0) return 0; // Don't show "."
-        else if (ent->d_name[1] == '.' && ent->d_name[2] == 0) return 0; // Don't show ".."
-    }
-    return 1;
 }
 
 // NOTE: This will eat everything in stdin.
@@ -205,22 +234,14 @@ static void display() {
     int newline_count = 0;
     int row_before, col_before;
     int row_after,  col_after;
-    DIR * d_current = NULL;
-    struct dirent ** d_children;
-    struct dirent * d_child;
+    struct dirent * d_child = NULL;
     int d_child_len;
     const char * d_child_color;
     char d_child_indicator;
 
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &termsize);
 
-    d_length = scandir(d_current_name, &d_children, display_filter, alphasort);
-    if (d_length == -1) {
-        selected_name[0] = 0;
-    }
-
-    d_current = opendir(d_current_name);
-    CHECKBAD(d_current == NULL, 1, "Could not open %s", d_current_name);
+    if (d_children == NULL) run_scan();
 
     // Validate selection index.
 
@@ -303,8 +324,10 @@ static void display() {
         free(d_child);
     }
 
-    if (d_children) free(d_children);
-    closedir(d_current);
+    if (d_children) {
+        free(d_children);
+        d_children = NULL;
+    }
 
     // If the lines overflowed does not match the difference in cursor height,
     // the terminal scrolled and we need to adjust the saved position.
@@ -355,6 +378,7 @@ static int open_selection(char * opener, int do_fork) {
 
 int main(int argc, char ** argv) {
     int flag;
+    char * start_dir = ".";
 
     setlocale(LC_ALL, "");
 
@@ -371,8 +395,13 @@ int main(int argc, char ** argv) {
     }}
 
     // If there is a remaining argument, it is the directory to start in.
-    if (optind < argc) cd(argv[optind]);
-    else               cd(".");
+    if (optind < argc) start_dir = argv[optind];
+
+    // Make sure the starting directory is valid.  Fallbacks need it to be.
+    if (!cd(start_dir)) {
+        fprintf(stderr, "%s\n", strerror(errno));
+        return 1;
+    }
 
     // Create raw terminal mode to stop stdin buffer from breaking key press detection.
     // http://pubs.opengroup.org/onlinepubs/000095399/basedefs/termios.h.html#tag_13_74_03_06
