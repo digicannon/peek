@@ -199,8 +199,8 @@ static void get_cursor_pos(int * row, int * col) {
     int ahead = 0;
     char c;
 
-    *row = 0;
-    *col = 0;
+    if (row) *row = 0;
+    if (col) *col = 0;
 
     // Attempt to clear out stdin.
     // CLEANUP: Is read with a NULL buffer really allowed?
@@ -218,18 +218,36 @@ scan_for_esc:
         c = getchar();
         if (c == ';') break;
         else if (c < '0' || c > '9') goto scan_for_esc;
-        *row = (*row * 10) + (c - '0');
+        if (row) *row = (*row * 10) + (c - '0');
     }
     while (1) {                              // Scan for %dR
         c = getchar();
         if (c == 'R') break;
         else if (c < '0' || c > '9') goto scan_for_esc;
-        *col = (*col * 10) + (c - '0');
+        if (col) *col = (*col * 10) + (c - '0');
     }
+}
+
+static int utf8_len(unsigned char * str) {
+    // UTF8: If 8th bit is set, this code point is multiple bytes.
+    // If both the 8th and 7th bits are set, this byte is not the first byte.
+    // Therefore, only add to the print count if:
+    // 1) This code point is only 1 byte (8th bit not set).
+    // 2) The 8th bit is set but not the 7th.
+    // Simplified, the 8th and 7th bits can't be 1 and 0 respectively.
+    // TODO: Some East Asian characters are two columns.  This isn't detected right now.
+    int len = 0;
+    for (unsigned char * c = str; *c; ++c) {
+        if ((*c & 0xC0) != 0x80) ++len;
+    }
+    return len;
 }
 
 static void display() {
     struct winsize termsize;
+    int * columns = NULL; // Columns that begin an entry.
+    char * column_skips = NULL; // Number of times a column was skipped.
+    int next_column = 0;
     int print_count = 0;
     int newline_count = 0;
     int row_before, col_before;
@@ -238,8 +256,12 @@ static void display() {
     int d_child_len;
     const char * d_child_color;
     char d_child_indicator;
+    int intended_col, intended_end;
 
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &termsize);
+    // There can't be more entries than the number of columns / the space between entries.
+    columns      = calloc(termsize.ws_col / strlen(ENTRY_DELIM), sizeof(*columns));
+    column_skips = calloc(termsize.ws_col / strlen(ENTRY_DELIM), sizeof(*column_skips));
 
     if (d_children == NULL) run_scan();
 
@@ -258,7 +280,8 @@ static void display() {
     // If enabled, print current directory.
 
     if (cfg_show_dir) {
-        print_count += printf(COLOR_BOLD COLOR_INVERT "%s" COLOR_RESET ": ", d_current_name);
+        printf(COLOR_BOLD COLOR_INVERT "%s" COLOR_RESET ":" ENTRY_DELIM, d_current_name);
+        print_count += d_current_len + 1 + strlen(ENTRY_DELIM);
     }
 
     // Now we can print the names of each entry.
@@ -275,8 +298,52 @@ static void display() {
 
     for (int i = 0; i < d_length; ++i) {
         d_child = d_children[i];
-        d_child_len = strlen(d_child->d_name);
+        d_child_len = utf8_len((unsigned char *)d_child->d_name);
         get_entry_type(d_child, &d_child_color, &d_child_indicator);
+        intended_col = print_count;
+        intended_end = 0;
+
+        // The first row will determine column formatting.
+        // Keep track of what column each entry starts in.
+        // If we aren't on the first line any more1
+        if (newline_count == 0) {
+            columns[next_column++] = print_count;
+            intended_end += strlen(ENTRY_DELIM);
+        } else if (newline_count > 0) {
+            int col;
+
+            // Adjust intended column to the next that can fit it.
+        adjust_column:
+            col = columns[next_column++];
+            while (intended_col > col) {
+                ++column_skips[next_column - 1];
+                col = columns[next_column++];
+            }
+
+            // If this entry is about to go right next to the last, adjust again.
+            if (col == intended_col || column_skips[next_column - 1] > 0) {
+                ++column_skips[next_column - 1];
+                goto adjust_column;
+            }
+
+            intended_col = col;
+        }
+
+        if (cfg_indicate) ++intended_end;
+        intended_end += intended_col + d_child_len;
+
+        //printf("\e[%d;%df\e[s", &row_before, intended_end);
+        //putchar('|');
+        // If this entry would line wrap, print a newline.
+        // Otherwise, pad space to get to the intended column.
+        if (intended_end >= termsize.ws_col) {
+            putchar('\n');
+            next_column = 0;
+            ++newline_count;
+            print_count = 0;
+        } else {
+            for (; print_count < intended_col; ++print_count) putchar(' ');
+        }
 
         if (i == selected) {
             // Copy the name into the selected_name buffer for possible cd request.
@@ -284,18 +351,8 @@ static void display() {
             printf(COLOR_INVERT);
         }
 
-        // Time to print this entry.
-
         // If enabled, print the corresponding color for the type.
         if (cfg_color && d_child_color) printf("%s", d_child_color);
-
-        // If this entry would line wrap, print a newline.
-        // +1 for indicator.
-        if (print_count + d_child_len + strlen(ENTRY_DELIM) + 1 >= termsize.ws_col) {
-            putchar('\n');
-            ++newline_count;
-            print_count = 0;
-        }
 
         // Print the name of the entry.
         for (unsigned char * c = (unsigned char *)d_child->d_name; *c; ++c) {
@@ -303,11 +360,12 @@ static void display() {
             // it is above control characters and not DEL.
             if (*c > 0x1F && *c != 0x7F) {
                 putchar(*c);
-                ++print_count;
             } else if (cfg_print_hex) {
-                print_count += printf("/%02X/", (unsigned char)*c);
+                // -1 since 1 character was already accounted for in d_child_len.
+                print_count += printf("/%02X/", (unsigned char)*c) - 1;
             }
         }
+        print_count += d_child_len;
 
         printf(COLOR_RESET);
 
@@ -317,11 +375,12 @@ static void display() {
             ++print_count;
         }
 
-        print_count += printf(ENTRY_DELIM);
+        if (newline_count == 0) print_count += printf(ENTRY_DELIM);
 
         free(d_child);
     }
 
+    free(columns);
     if (d_children) {
         free(d_children);
         d_children = NULL;
