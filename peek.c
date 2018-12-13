@@ -279,9 +279,7 @@ static void display() {
         get_entry_type(d_child, &d_child_color, &d_child_indicator);
 
         if (i == selected) {
-            // Set the selection as valid if it is a directory.
-            // Copy the name into the selected_name buffer.
-
+            // Copy the name into the selected_name buffer for possible cd request.
             memcpy(selected_name, d_child->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
             printf(COLOR_INVERT);
         }
