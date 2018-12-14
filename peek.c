@@ -44,9 +44,11 @@
                     "   J|Down|Enter   Open selected directory.\n" \
                     "   H|Left         Move selection left.\n" \
                     "   L|Right        Move selection right.\n"
-#define MSG_CANT_SCAN "/could not scan/"
-#define MSG_EMPTY     "/empty/"
+#define MSG_CANT_SCAN "could not scan"
+#define MSG_EMPTY     "empty"
 
+// 8.3 was FAT's max filename.  That sounds like a good minimum.
+#define MIN_ENTRY_LEN 13
 #define ENTRY_DELIM "  "
 
 #define OPEN_IN_PROCESS 0
@@ -66,7 +68,7 @@ static char selected_name[SELECTED_MAXLEN];
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
 
-static int last_overflow_count = 0; // Number of lines overflowed by last display.
+static int last_newline_count = 0; // Number of lines overflowed by last display.
 
 static char cfg_show_dotfiles = 0; // (-a) If set, files starting with . will be shown.
 static char cfg_color         = 1; // (-B) If set, color output.  -B unsets this.
@@ -81,7 +83,7 @@ static char cfg_print_hex     = 0; // (-x) If set, print unprintable characters 
 static void restore_tcattr() {
     printf("\e[?25h"); // Show cursor.
     if (cfg_clear_trace) printf("\e[u\e[0J\e[2K"); // Clear last display, see display().
-    else for (int l = 0; l <= last_overflow_count; ++l) putchar('\n');
+    else for (int l = 0; l <= last_newline_count; ++l) putchar('\n');
 
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
 }
@@ -177,7 +179,7 @@ static void get_entry_type(struct dirent * ent, const char ** color, char * indi
     static const char indicators[] = "\0|\0\0/\0\0\0\0\0@\0=";
 
     if (ent->d_type > 0 && ent->d_type <= DT_SOCK
-            && (colors[ent->d_type] || indicators[ent->d_type])) {
+        && (colors[ent->d_type] || indicators[ent->d_type])) {
         *color     = colors[ent->d_type];
         *indicator = indicators[ent->d_type];
     } else {
@@ -235,33 +237,35 @@ static int utf8_len(unsigned char * str) {
     // 1) This code point is only 1 byte (8th bit not set).
     // 2) The 8th bit is set but not the 7th.
     // Simplified, the 8th and 7th bits can't be 1 and 0 respectively.
-    // TODO: Some East Asian characters are two columns.  This isn't detected right now.
     int len = 0;
     for (unsigned char * c = str; *c; ++c) {
-        if ((*c & 0xC0) != 0x80) ++len;
+        if (*c > 0x1F && *c != 0x7F) {
+            if ((*c & 0xC0) != 0x80) ++len;
+        } else if (cfg_print_hex) {
+            // 2 = \XX - 1
+            if ((*c & 0xC0) != 0x80) len += 2;
+        }
     }
     return len;
 }
 
 static void display() {
     struct winsize termsize;
-    int * columns = NULL; // Columns that begin an entry.
-    char * column_skips = NULL; // Number of times a column was skipped.
-    int next_column = 0;
-    int print_count = 0;
-    int newline_count = 0;
+    int longest_entry_len = 0;
+    int newline_count = 0; // Amount of newlines printed.
+    int avg_columns   = 0; // Average output length of entries.
+    int total_length  = 0; // Length of output without newlines.
+    char formatted    = 1; // If set, output will do column formatting.
+    int next_column   = 0;
     int row_before, col_before;
     int row_after,  col_after;
     struct dirent * d_child = NULL;
     int d_child_len;
     const char * d_child_color;
     char d_child_indicator;
-    int intended_col, intended_end;
+    int used_chars = 0;
 
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &termsize);
-    // There can't be more entries than the number of columns / the space between entries.
-    columns      = calloc(termsize.ws_col / strlen(ENTRY_DELIM), sizeof(*columns));
-    column_skips = calloc(termsize.ws_col / strlen(ENTRY_DELIM), sizeof(*column_skips));
 
     if (d_children == NULL) run_scan();
 
@@ -277,72 +281,74 @@ static void display() {
     printf("\e[u\e[0J\e[2K");
     get_cursor_pos(&row_before, &col_before);
 
-    // If enabled, print current directory.
+    // If enabled, print current directory name.
 
     if (cfg_show_dir) {
-        printf(COLOR_BOLD COLOR_INVERT "%s" COLOR_RESET ":" ENTRY_DELIM, d_current_name);
-        print_count += d_current_len + 1 + strlen(ENTRY_DELIM);
+        printf(COLOR_INVERT COLOR_BOLD "%s" COLOR_RESET "\n", d_current_name);
+        ++newline_count;
     }
-
-    // Now we can print the names of each entry.
 
     printf(COLOR_RESET);
 
     if (d_length < 0) {
         // The directory couldn't be opened.  Say so.
-        print_count += printf(MSG_CANT_SCAN COLOR_RESET " ");
+        printf(MSG_CANT_SCAN COLOR_RESET);
     } else if (d_length == 0) {
         // The directory is empty.  Say so.
-        print_count += printf(MSG_EMPTY COLOR_RESET " ");
+        printf(MSG_EMPTY COLOR_RESET);
+    }
+
+    // Calculate average display length and total length of output.
+    for (int i = 0; i < d_length; ++i) {
+        d_child = d_children[i];
+        d_child_len = utf8_len((unsigned char *)d_child->d_name);
+        get_entry_type(d_child, &d_child_color, &d_child_indicator);
+
+        // Try to prevent abnormally sized entries from skewing average.
+        if (i == 0 || (
+                d_child_len < avg_columns / i + MIN_ENTRY_LEN
+                && d_child_len >= MIN_ENTRY_LEN)) {
+            avg_columns += d_child_len;
+        }
+
+        if (d_child_len > longest_entry_len) longest_entry_len = d_child_len;
+
+        total_length += d_child_len;
+        if (cfg_indicate && d_child_indicator) ++total_length;
+        total_length += strlen(ENTRY_DELIM);
+    }
+    if (d_length) avg_columns /= d_length;
+
+    // Don't force columns to be bigger than the longest entry.
+    if (avg_columns < MIN_ENTRY_LEN) {
+        avg_columns = longest_entry_len < 13 ? longest_entry_len : 13;
+    }
+
+    // If we can fit on one line, no need to format.
+    if (total_length < termsize.ws_col) {
+        formatted = 0;
     }
 
     for (int i = 0; i < d_length; ++i) {
         d_child = d_children[i];
         d_child_len = utf8_len((unsigned char *)d_child->d_name);
         get_entry_type(d_child, &d_child_color, &d_child_indicator);
-        intended_col = print_count;
-        intended_end = 0;
+        used_chars = 0;
 
-        // The first row will determine column formatting.
-        // Keep track of what column each entry starts in.
-        // If we aren't on the first line any more1
-        if (newline_count == 0) {
-            columns[next_column++] = print_count;
-            intended_end += strlen(ENTRY_DELIM);
-        } else if (newline_count > 0) {
-            int col;
+        if (formatted) {
+            // If we're putting entries in columns,
+            // we need to figure out where this entry should end.
+            // If it would line wrap, print a newline.
 
-            // Adjust intended column to the next that can fit it.
-        adjust_column:
-            col = columns[next_column++];
-            while (intended_col > col) {
-                ++column_skips[next_column - 1];
-                col = columns[next_column++];
+            int intended_end = avg_columns + strlen(ENTRY_DELIM);
+            intended_end *= ++next_column;
+            if (cfg_indicate) ++intended_end;
+
+            if (intended_end >= termsize.ws_col) {
+                putchar('\n');
+                next_column = 1;
+                ++newline_count;
             }
-
-            // If this entry is about to go right next to the last, adjust again.
-            if (col == intended_col || column_skips[next_column - 1] > 0) {
-                ++column_skips[next_column - 1];
-                goto adjust_column;
-            }
-
-            intended_col = col;
-        }
-
-        if (cfg_indicate) ++intended_end;
-        intended_end += intended_col + d_child_len;
-
-        //printf("\e[%d;%df\e[s", &row_before, intended_end);
-        //putchar('|');
-        // If this entry would line wrap, print a newline.
-        // Otherwise, pad space to get to the intended column.
-        if (intended_end >= termsize.ws_col) {
-            putchar('\n');
-            next_column = 0;
-            ++newline_count;
-            print_count = 0;
-        } else {
-            for (; print_count < intended_col; ++print_count) putchar(' ');
         }
 
         if (i == selected) {
@@ -356,31 +362,41 @@ static void display() {
 
         // Print the name of the entry.
         for (unsigned char * c = (unsigned char *)d_child->d_name; *c; ++c) {
+            if (formatted) {
+                // Stop early for end of column.
+                if (used_chars++ == (cfg_indicate && d_child_indicator ?
+                                     avg_columns - 1 : avg_columns)) {
+                    // Replace last character with truncation indictaor.
+                    printf(COLOR_RESET "\b~");
+                    break;
+                }
+            }
+
             // This character is printable if
             // it is above control characters and not DEL.
             if (*c > 0x1F && *c != 0x7F) {
                 putchar(*c);
             } else if (cfg_print_hex) {
-                // -1 since 1 character was already accounted for in d_child_len.
-                print_count += printf("/%02X/", (unsigned char)*c) - 1;
+                printf("\\%02X", (unsigned char)*c);
             }
         }
-        print_count += d_child_len;
 
         printf(COLOR_RESET);
 
         // If enabled, print the corresponding indicator for the type.
         if (cfg_indicate && d_child_indicator) {
             putchar(d_child_indicator);
-            ++print_count;
+            ++used_chars;
         }
 
-        if (newline_count == 0) print_count += printf(ENTRY_DELIM);
+        if (formatted) {
+            for (; used_chars < avg_columns; ++used_chars) putchar(' ');
+        }
+        printf(ENTRY_DELIM);
 
         free(d_child);
     }
 
-    free(columns);
     if (d_children) {
         free(d_children);
         d_children = NULL;
@@ -390,11 +406,10 @@ static void display() {
     // the terminal scrolled and we need to adjust the saved position.
 
     get_cursor_pos(&row_after, &col_after);
-    print_count = print_count + newline_count * termsize.ws_col;
-    last_overflow_count = print_count / termsize.ws_col;
-    if (last_overflow_count) {
+    last_newline_count = newline_count;
+    if (newline_count) {
         // Move cursor up to adjust for overflow and save it.
-        printf("\e[%d;%df\e[s", row_after - last_overflow_count, col_before);
+        printf("\e[%d;%df\e[s", row_after - newline_count, col_before);
     }
 }
 
