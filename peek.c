@@ -242,8 +242,8 @@ static int utf8_len(unsigned char * str) {
         if (*c > 0x1F && *c != 0x7F) {
             if ((*c & 0xC0) != 0x80) ++len;
         } else if (cfg_print_hex) {
-            // 2 = \XX - 1
-            if ((*c & 0xC0) != 0x80) len += 2;
+            // 3 = \XX
+            if ((*c & 0xC0) != 0x80) len += 3;
         }
     }
     return len;
