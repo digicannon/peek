@@ -50,17 +50,31 @@
 // 8.3 was FAT's max filename.  That sounds like a good minimum.
 #define MIN_ENTRY_LEN 13
 #define ENTRY_DELIM "  "
+#define ENTRY_DELIM_LEN 2
 
 #define OPEN_IN_PROCESS 0
 #define OPEN_WITH_FORK  1
 
-static char * d_current_name = NULL;
-static int d_current_len = 0; // Strlen of current dir name.
-static int d_length = 0;      // Number of entries in current dir.
-struct dirent ** d_children = NULL;
+typedef struct peek_entry {
+    int len; // Printed UTF8 length, not number of bytes.
+    const char * color;
+    char indicator;
+} peek_entry;
+
+static char * current_dir = NULL;
+static int current_dir_len = 0;
+
+static struct dirent ** posix_entries = NULL;
+static peek_entry * entry_data = NULL;
+static int entry_count = 0;   // Number of entries in current dir.
+
+static int avg_columns   = 0; // Average output length of entries.
+static int total_length  = 0; // Length of output without newlines.
+static char formatted    = 1; // If set, output will do column formatting.
+static int last_newline_count = 0; // Number of lines overflowed by last display.
 
 #define SELECTED_MIN 0
-#define SELECTED_MAX (d_length - 1)
+#define SELECTED_MAX (entry_count - 1)
 static int selected = SELECTED_MIN;
 #define SELECTED_MAXLEN 256
 static char selected_name[SELECTED_MAXLEN];
@@ -68,13 +82,12 @@ static char selected_name[SELECTED_MAXLEN];
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
 
-static int last_newline_count = 0; // Number of lines overflowed by last display.
-
 static char cfg_show_dotfiles = 0; // (-a) If set, files starting with . will be shown.
 static char cfg_color         = 1; // (-B) If set, color output.  -B unsets this.
 static char cfg_clear_trace   = 0; // (-c) If set, clear displayed text on exit.
 static char cfg_show_dir      = 0; // (-d) If set, print current dir before listing.
 static char cfg_indicate      = 0; // (-F) If set, append indicators to entries.
+static char cfg_format_hori   = 0; // (-h) If set, format horizontally.
 static char cfg_print_hex     = 0; // (-x) If set, print unprintable characters as hex.
 
 // TEMP:
@@ -97,67 +110,43 @@ static int display_filter(const struct dirent * ent) {
     return 1;
 }
 
+static int utf8_len(unsigned char * str) {
+    // UTF8: If 8th bit is set, this code point is multiple bytes.
+    // If both the 8th and 7th bits are set, this byte is not the first byte.
+    // Therefore, only add to the print count if:
+    // 1) This code point is only 1 byte (8th bit not set).
+    // 2) The 8th bit is set but not the 7th.
+    // Simplified, the 8th and 7th bits can't be 1 and 0 respectively.
+    int len = 0;
+    for (unsigned char * c = str; *c; ++c) {
+        if (*c > 0x1F && *c != 0x7F) {
+            if ((*c & 0xC0) != 0x80) ++len;
+        } else if (cfg_print_hex) {
+            // 3 = \XX
+            if ((*c & 0xC0) != 0x80) len += 3;
+        }
+    }
+    return len;
+}
+
 // If to, the current directory string being appended, is NULL,
-// exact space is allocated and d_current_name is copied.
+// exact space is allocated and current_dir is copied.
 // Returns to, whether that be the original or a result of the above condition.
 // NOTE: If not NULL, to must be a copy of to.
 static char * append_to_cd(char * to, char * suffix) {
     size_t suffix_len = strlen(suffix);
-    size_t to_len = d_current_len + suffix_len + 2;
+    size_t to_len = current_dir_len + suffix_len + 2;
 
     CHECKBAD(to_len > PATH_MAX, 1, "%s/%s is too long of a path!", to, suffix);
-    if (to == NULL) to = malloc(sizeof(*d_current_name) * to_len);
+    if (to == NULL) to = malloc(sizeof(*current_dir) * to_len);
     CHECKBAD(to == NULL, 1, "Out of memory!%c", 0);
 
-    memcpy(to, d_current_name, sizeof(*d_current_name) * d_current_len);
-    to[d_current_len] = '/';
-    memcpy(to + d_current_len + 1, suffix, sizeof(*d_current_name) * suffix_len);
-    to[d_current_len + 1 + suffix_len] = 0;
+    memcpy(to, current_dir, sizeof(*current_dir) * current_dir_len);
+    to[current_dir_len] = '/';
+    memcpy(to + current_dir_len + 1, suffix, sizeof(*current_dir) * suffix_len);
+    to[current_dir_len + 1 + suffix_len] = 0;
 
     return to;
-}
-
-static void run_scan() {
-    d_length = scandir(d_current_name, &d_children, display_filter, alphasort);
-    if (d_length == -1) {
-        selected_name[0] = 0;
-    }
-}
-
-// TODO: Replace realpath.  We shouldn't be resolving symlinks.
-static char cd(char * to) {
-    char * old_path;
-    
-    if (d_current_name) {
-        // Only provide fallback if this is not the initial path.
-        old_path = malloc(sizeof(*old_path) * PATH_MAX);
-        memcpy(old_path, d_current_name, sizeof(*old_path) * PATH_MAX);
-    }
-
-    if (d_current_name == NULL) {
-        d_current_name = malloc(sizeof(*d_current_name) * PATH_MAX);
-        realpath(to, d_current_name);
-    } else if (to[0] == '/') {
-        realpath(to, d_current_name);
-    } else {
-        char * new = append_to_cd(NULL, to);
-        realpath(new, d_current_name);
-        free(new);
-    }
-
-    run_scan();
-    if (d_length == -1) {
-        // This "directory" (could be a file or something) failed to scan.
-        // Restore old file path.
-        free(d_current_name);
-        d_current_name = old_path;
-        return 0;
-    }
-    free(old_path);
-
-    d_current_len = strlen(d_current_name);
-    selected = SELECTED_MIN;
-    return 1;
 }
 
 static void get_entry_type(struct dirent * ent, const char ** color, char * indicator) {
@@ -196,6 +185,100 @@ static void get_entry_type(struct dirent * ent, const char ** color, char * indi
     }
 }
 
+static void run_scan() {
+    int old_entry_count = entry_count;
+    int longest_entry_len = 0;
+    int len = 0;
+
+    entry_count = scandir(current_dir, &posix_entries, display_filter, alphasort);
+    if (entry_count == -1) {
+        selected_name[0] = 0;
+        return;
+    }
+
+    if (entry_data == NULL || entry_count > old_entry_count) {
+        entry_data = realloc(entry_data, sizeof(*entry_data) * entry_count);
+    }
+
+    avg_columns  = 0;
+    total_length = 0;
+    formatted    = 1;
+
+    // Calculate average display length and total length of output.
+    for (int i = 0; i < entry_count; ++i) {
+        entry_data[i].len = utf8_len((unsigned char *)posix_entries[i]->d_name);
+        len = entry_data[i].len;
+
+        get_entry_type(posix_entries[i], &entry_data[i].color, &entry_data[i].indicator);
+        if (!cfg_color)    entry_data[i].color     = 0;
+        if (!cfg_indicate) entry_data[i].indicator = 0;
+
+        // Try to prevent abnormally sized entries from skewing average.
+        if (i == 0 || (
+                len < avg_columns / i + MIN_ENTRY_LEN
+                && len >= MIN_ENTRY_LEN)) {
+            avg_columns += len;
+        }
+
+        if (len > longest_entry_len) longest_entry_len = len;
+
+        total_length += len;
+        if (entry_data[i].indicator) ++total_length;
+        total_length += ENTRY_DELIM_LEN;
+    }
+    if (entry_count) avg_columns /= entry_count;
+
+    // Don't force columns to be bigger than the longest entry.
+    if (avg_columns < MIN_ENTRY_LEN) {
+        avg_columns = longest_entry_len < 13 ? longest_entry_len : 13;
+    }
+}
+
+// TODO: Replace realpath.  We shouldn't be resolving symlinks.
+static char cd(char * to) {
+    char * old_path;
+    int old_len = current_dir_len;
+
+    if (current_dir) {
+        // Only provide fallback if this is not the initial path.
+        old_path = malloc(sizeof(*old_path) * PATH_MAX);
+        memcpy(old_path, current_dir, sizeof(*old_path) * PATH_MAX);
+    }
+
+    if (current_dir == NULL) {
+        current_dir = malloc(sizeof(*current_dir) * PATH_MAX);
+        realpath(to, current_dir);
+    } else if (to[0] == '/') {
+        realpath(to, current_dir);
+    } else {
+        char * new = append_to_cd(NULL, to);
+        realpath(new, current_dir);
+        free(new);
+    }
+
+    current_dir_len = strlen(current_dir);
+
+    if (posix_entries) {
+        for (int i = 0; i < entry_count; ++i) free(posix_entries[i]);
+        free(posix_entries);
+        posix_entries = NULL;
+    }
+
+    run_scan();
+    if (entry_count == -1) {
+        // This "directory" (could be a file or something) failed to scan.
+        // Restore old file path.
+        free(current_dir);
+        current_dir     = old_path;
+        current_dir_len = old_len;
+        return 0;
+    }
+    free(old_path);
+
+    selected = SELECTED_MIN;
+    return 1;
+}
+
 // NOTE: This will eat everything in stdin.
 static void get_cursor_pos(int * row, int * col) {
     int ahead = 0;
@@ -230,48 +313,24 @@ scan_for_esc:
     }
 }
 
-static int utf8_len(unsigned char * str) {
-    // UTF8: If 8th bit is set, this code point is multiple bytes.
-    // If both the 8th and 7th bits are set, this byte is not the first byte.
-    // Therefore, only add to the print count if:
-    // 1) This code point is only 1 byte (8th bit not set).
-    // 2) The 8th bit is set but not the 7th.
-    // Simplified, the 8th and 7th bits can't be 1 and 0 respectively.
-    int len = 0;
-    for (unsigned char * c = str; *c; ++c) {
-        if (*c > 0x1F && *c != 0x7F) {
-            if ((*c & 0xC0) != 0x80) ++len;
-        } else if (cfg_print_hex) {
-            // 3 = \XX
-            if ((*c & 0xC0) != 0x80) len += 3;
-        }
-    }
-    return len;
-}
-
 static void display() {
     struct winsize termsize;
-    int longest_entry_len = 0;
     int newline_count = 0; // Amount of newlines printed.
-    int avg_columns   = 0; // Average output length of entries.
-    int total_length  = 0; // Length of output without newlines.
-    char formatted    = 1; // If set, output will do column formatting.
     int next_column   = 0;
     int row_before, col_before;
     int row_after,  col_after;
     struct dirent * d_child = NULL;
-    int d_child_len;
     const char * d_child_color;
     char d_child_indicator;
     int used_chars = 0;
 
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &termsize);
 
-    if (d_children == NULL) run_scan();
+    if (posix_entries == NULL) run_scan();
 
     // Validate selection index.
 
-    if (d_length < 1) selected = 0;
+    if (entry_count < 1) selected = 0;
     else if (selected < SELECTED_MIN) selected = SELECTED_MAX;
     else if (selected > SELECTED_MAX) selected = SELECTED_MIN;
 
@@ -284,44 +343,18 @@ static void display() {
     // If enabled, print current directory name.
 
     if (cfg_show_dir) {
-        printf(COLOR_INVERT COLOR_BOLD "%s" COLOR_RESET "\n", d_current_name);
+        printf(COLOR_INVERT COLOR_BOLD "%s" COLOR_RESET "\n", current_dir);
         ++newline_count;
     }
 
     printf(COLOR_RESET);
 
-    if (d_length < 0) {
+    if (entry_count < 0) {
         // The directory couldn't be opened.  Say so.
         printf(MSG_CANT_SCAN COLOR_RESET);
-    } else if (d_length == 0) {
+    } else if (entry_count == 0) {
         // The directory is empty.  Say so.
         printf(MSG_EMPTY COLOR_RESET);
-    }
-
-    // Calculate average display length and total length of output.
-    for (int i = 0; i < d_length; ++i) {
-        d_child = d_children[i];
-        d_child_len = utf8_len((unsigned char *)d_child->d_name);
-        get_entry_type(d_child, &d_child_color, &d_child_indicator);
-
-        // Try to prevent abnormally sized entries from skewing average.
-        if (i == 0 || (
-                d_child_len < avg_columns / i + MIN_ENTRY_LEN
-                && d_child_len >= MIN_ENTRY_LEN)) {
-            avg_columns += d_child_len;
-        }
-
-        if (d_child_len > longest_entry_len) longest_entry_len = d_child_len;
-
-        total_length += d_child_len;
-        if (cfg_indicate && d_child_indicator) ++total_length;
-        total_length += strlen(ENTRY_DELIM);
-    }
-    if (d_length) avg_columns /= d_length;
-
-    // Don't force columns to be bigger than the longest entry.
-    if (avg_columns < MIN_ENTRY_LEN) {
-        avg_columns = longest_entry_len < 13 ? longest_entry_len : 13;
     }
 
     // If we can fit on one line, no need to format.
@@ -329,10 +362,10 @@ static void display() {
         formatted = 0;
     }
 
-    for (int i = 0; i < d_length; ++i) {
-        d_child = d_children[i];
-        d_child_len = utf8_len((unsigned char *)d_child->d_name);
-        get_entry_type(d_child, &d_child_color, &d_child_indicator);
+    for (int i = 0; i < entry_count; ++i) {
+        d_child = posix_entries[i];
+        d_child_color = entry_data[i].color;
+        d_child_indicator = entry_data[i].indicator;
         used_chars = 0;
 
         if (formatted) {
@@ -340,7 +373,7 @@ static void display() {
             // we need to figure out where this entry should end.
             // If it would line wrap, print a newline.
 
-            int intended_end = avg_columns + strlen(ENTRY_DELIM);
+            int intended_end = avg_columns + ENTRY_DELIM_LEN;
             intended_end *= ++next_column;
             if (cfg_indicate) ++intended_end;
 
@@ -358,13 +391,13 @@ static void display() {
         }
 
         // If enabled, print the corresponding color for the type.
-        if (cfg_color && d_child_color) printf("%s", d_child_color);
+        if (d_child_color) printf("%s", d_child_color);
 
         // Print the name of the entry.
         for (unsigned char * c = (unsigned char *)d_child->d_name; *c; ++c) {
             if (formatted) {
                 // Stop early for end of column.
-                if (used_chars++ == (cfg_indicate && d_child_indicator ?
+                if (used_chars++ == (d_child_indicator ?
                                      avg_columns - 1 : avg_columns)) {
                     // Replace last character with truncation indictaor.
                     printf(COLOR_RESET "\b~");
@@ -384,7 +417,7 @@ static void display() {
         printf(COLOR_RESET);
 
         // If enabled, print the corresponding indicator for the type.
-        if (cfg_indicate && d_child_indicator) {
+        if (d_child_indicator) {
             putchar(d_child_indicator);
             ++used_chars;
         }
@@ -393,13 +426,6 @@ static void display() {
             for (; used_chars < avg_columns; ++used_chars) putchar(' ');
         }
         printf(ENTRY_DELIM);
-
-        free(d_child);
-    }
-
-    if (d_children) {
-        free(d_children);
-        d_children = NULL;
     }
 
     // If the lines overflowed does not match the difference in cursor height,
