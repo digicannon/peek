@@ -52,6 +52,16 @@
 #define ENTRY_DELIM "  "
 #define ENTRY_DELIM_LEN 2
 
+// UTF8: If 8th bit is set, this code point is multiple bytes.
+// If both the 8th and 7th bits are set, this byte is not the first byte.
+// Therefore, only add to the print count if:
+// 1) This code point is only 1 byte (8th bit not set).
+// 2) The 8th bit is set but not the 7th.
+// Simplified, the 8th and 7th bits can't be 1 and 0 respectively.
+#define UTF8_COUNTABLE(c) ((c & 0xC0) != 0x80)
+// A character is printable if above the controls and not DEL.
+#define UTF8_PRINTABLE(c) (c > 0x1F && c != 0x7F)
+
 #define OPEN_IN_PROCESS 0
 #define OPEN_WITH_FORK  1
 
@@ -110,21 +120,20 @@ static int display_filter(const struct dirent * ent) {
     return 1;
 }
 
+static int utf8_char_len(unsigned char c) {
+    if (UTF8_PRINTABLE(c)) {
+        if (UTF8_COUNTABLE(c)) return 1;
+    } else if (cfg_print_hex) {
+        // 3 = \XX
+        if (UTF8_COUNTABLE(c)) return 3;
+    }
+    return 0;
+}
+
 static int utf8_len(unsigned char * str) {
-    // UTF8: If 8th bit is set, this code point is multiple bytes.
-    // If both the 8th and 7th bits are set, this byte is not the first byte.
-    // Therefore, only add to the print count if:
-    // 1) This code point is only 1 byte (8th bit not set).
-    // 2) The 8th bit is set but not the 7th.
-    // Simplified, the 8th and 7th bits can't be 1 and 0 respectively.
     int len = 0;
     for (unsigned char * c = str; *c; ++c) {
-        if (*c > 0x1F && *c != 0x7F) {
-            if ((*c & 0xC0) != 0x80) ++len;
-        } else if (cfg_print_hex) {
-            // 3 = \XX
-            if ((*c & 0xC0) != 0x80) len += 3;
-        }
+        len += utf8_char_len(*c);
     }
     return len;
 }
@@ -397,17 +406,22 @@ static void display() {
         for (unsigned char * c = (unsigned char *)d_child->d_name; *c; ++c) {
             if (formatted) {
                 // Stop early for end of column.
-                if (used_chars++ == (d_child_indicator ?
-                                     avg_columns - 1 : avg_columns)) {
+
+                int len = utf8_char_len(*c);
+                used_chars += len;
+
+                if (used_chars >= (d_child_indicator ?
+                                         avg_columns - 1 : avg_columns)) {
                     // Replace last character with truncation indictaor.
-                    printf(COLOR_RESET "\b~");
+                    printf(COLOR_RESET "~");
+                    if (len == 3) used_chars -= 2;
                     break;
                 }
             }
 
             // This character is printable if
             // it is above control characters and not DEL.
-            if (*c > 0x1F && *c != 0x7F) {
+            if (UTF8_PRINTABLE(*c)) {
                 putchar(*c);
             } else if (cfg_print_hex) {
                 printf("\\%02X", (unsigned char)*c);
