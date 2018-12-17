@@ -26,24 +26,24 @@
 #define SHORT_FLAGS "aBcdFhx"
 #define MSG_USAGE   "Usage: %s [-" SHORT_FLAGS "] [<directory>]"
 #define MSG_INVALID MSG_USAGE "\nTry '%s -h' for more information.\n"
-#define MSG_HELP    MSG_USAGE "\nInteractive exploration of directories on the command line.\n" \
-                    "\nFlags:\n" \
-                    "  -a\tShow files starting with . (hidden by default)\n" \
-                    "  -B\tDon't output color.\n" \
-                    "  -c\tClear listing on exit.\n" \
-                    "  -d\tPrint current directory path before listing.\n" \
-                    "  -F\tAppend ls style indicators to the end of entries.\n" \
-                    "  -h\tPrint this message and exit.\n" \
-                    "  -x\tPrint unprintable characters as hex.  Carriage return would be /0D/.\n" \
-                    "\nKeys:\n" \
-                    "   E\tEdit selected entry.\n" \
-                    "   O\tOpen selected entry.\n" \
-                    "   X\tExecute selected entry.\n" \
-                    "   Q\tQuit.\n" \
-                    "   K|Up           Go up a directory.\n" \
-                    "   J|Down|Enter   Open selected directory.\n" \
-                    "   H|Left         Move selection left.\n" \
-                    "   L|Right        Move selection right.\n"
+#define MSG_HELP MSG_USAGE "\nInteractive exploration of directories on the command line.\n"              \
+                           "\nFlags:\n"                                                                   \
+                           "  -a\tShow files starting with . (hidden by default)\n"                       \
+                           "  -B\tDon't output color.\n"                                                  \
+                           "  -c\tClear listing on exit.\n"                                               \
+                           "  -d\tPrint current directory path before listing.\n"                         \
+                           "  -F\tAppend ls style indicators to the end of entries.\n"                    \
+                           "  -h\tPrint this message and exit.\n"                                         \
+                           "  -x\tPrint unprintable characters as hex.  Carriage return would be /0D/.\n" \
+                           "\nKeys:\n"                                                                    \
+                           "   E\tEdit selected entry.\n"                                                 \
+                           "   O\tOpen selected entry.\n"                                                 \
+                           "   X\tExecute selected entry.\n"                                              \
+                           "   Q\tQuit.\n"                                                                \
+                           "   K|Up           Go up a directory.\n"                                       \
+                           "   J|Down|Enter   Open selected directory.\n"                                 \
+                           "   H|Left         Move selection left.\n"                                     \
+                           "   L|Right        Move selection right.\n"
 #define MSG_CANT_SCAN "could not scan"
 #define MSG_EMPTY     "empty"
 
@@ -520,38 +520,38 @@ redo:
     switch (getchar()) {
     default: goto redo;
     case 'E': case 'e': // Edit
-         return open_selection("/usr/bin/vim", OPEN_IN_PROCESS);
+        return open_selection("/usr/bin/vim", OPEN_IN_PROCESS);
     case 'O': case 'o': // Open
-         return open_selection("/usr/bin/xdg-open", OPEN_WITH_FORK);
+        return open_selection("/usr/bin/xdg-open", OPEN_WITH_FORK);
     case 'X': case 'x': // eXecute
-         return open_selection(NULL, OPEN_IN_PROCESS);
+        return open_selection(NULL, OPEN_IN_PROCESS);
     case 'K': case 'k': // Select Parent
-         cd(".."); break;
+        cd(".."); break;
     case 'J': case 'j': // Select
     case '\n':
-         cd(selected_name); break;
+        cd(selected_name); break;
     case 'H': case 'h': // Left
-         --selected; break;
+        --selected; break;
     case 'L': case 'l': // Right
-         ++selected; break;
+        ++selected; break;
     case 'Q': case 'q': // Quit
-         return 0;
+        return 0;
     case 0x1B: // ESC
-         if (getchar() != '[') return 0; // If just escape key, quit.
+        if (getchar() != '[') return 0; // If just escape key, quit.
 
-         // Arrow key escape codes have to be handled seperately than
-         // the above handling of ASCII keys.
-         switch (getchar()) {
-         case 'A': // Select Parent (Up)
-             cd(".."); break;
-         case 'B': // Select (Down)
-             cd(selected_name); break;
-         case 'D': // Left
-             --selected; break;
-         case 'C': // Right
-             ++selected; break;
-         }
-         break;
+        // Arrow key escape codes have to be handled seperately than
+        // the above handling of ASCII keys.
+        switch (getchar()) {
+        case 'A': // Select Parent (Up)
+            cd(".."); break;
+        case 'B': // Select (Down)
+            cd(selected_name); break;
+        case 'D': // Left
+            --selected; break;
+        case 'C': // Right
+            ++selected; break;
+        }
+        break;
     }
 
     display();
