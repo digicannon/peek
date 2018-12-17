@@ -245,7 +245,7 @@ static void run_scan() {
 
 // TODO: Replace realpath.  We shouldn't be resolving symlinks.
 static char cd(char * to) {
-    char * old_path;
+    char * old_path = NULL;
     int old_len = current_dir_len;
 
     if (current_dir) {
@@ -282,7 +282,7 @@ static char cd(char * to) {
         current_dir_len = old_len;
         return 0;
     }
-    free(old_path);
+    if (old_path) free(old_path);
 
     selected = SELECTED_MIN;
     return 1;
