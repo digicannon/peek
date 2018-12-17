@@ -410,8 +410,7 @@ static void display() {
                 int len = utf8_char_len(*c);
                 used_chars += len;
 
-                if (used_chars >= (d_child_indicator ?
-                                         avg_columns - 1 : avg_columns)) {
+                if (used_chars >= (d_child_indicator ? avg_columns - 1 : avg_columns)) {
                     // Replace last character with truncation indictaor.
                     printf(COLOR_RESET "~");
                     if (len == 3) used_chars -= 2;
