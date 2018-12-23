@@ -57,13 +57,25 @@
 // Therefore, only add to the print count if:
 // 1) This code point is only 1 byte (8th bit not set).
 // 2) The 8th bit is set but not the 7th.
-// Simplified, the 8th and 7th bits can't be 1 and 0 respectively.
 #define UTF8_COUNTABLE(c) ((c & 0xC0) != 0x80)
 // A character is printable if above the controls and not DEL.
 #define UTF8_PRINTABLE(c) (c > 0x1F && c != 0x7F)
 
 #define OPEN_IN_PROCESS 0
 #define OPEN_WITH_FORK  1
+
+typedef enum user_action {
+    USER_ACT_MV_UP,
+    USER_ACT_MV_DOWN,
+    USER_ACT_MV_LEFT,
+    USER_ACT_MV_RIGHT,
+    USER_ACT_CD_PARENT,
+    USER_ACT_CD_SELECT,
+    USER_ACT_CD_RELOAD,
+    USER_ACT_ON_EDIT,
+    USER_ACT_ON_EXEC,
+    USER_ACT_ON_OPEN,
+} user_action;
 
 typedef struct peek_entry {
     int len; // Printed UTF8 length, not number of bytes.
@@ -81,7 +93,8 @@ static int entry_count = 0;   // Number of entries in current dir.
 static int avg_columns   = 0; // Average output length of entries.
 static int total_length  = 0; // Length of output without newlines.
 static char formatted    = 1; // If set, output will do column formatting.
-static int last_newline_count = 0; // Number of lines overflowed by last display.
+static int max_column    = 0; // Number of format columns printed by last display.
+static int newline_count = 0; // Number of lines printed by last display.
 
 #define SELECTED_MIN 0
 #define SELECTED_MAX (entry_count - 1)
@@ -97,7 +110,7 @@ static char cfg_color         = 1; // (-B) If set, color output.  -B unsets this
 static char cfg_clear_trace   = 0; // (-c) If set, clear displayed text on exit.
 static char cfg_show_dir      = 0; // (-d) If set, print current dir before listing.
 static char cfg_indicate      = 0; // (-F) If set, append indicators to entries.
-static char cfg_format_hori   = 0; // (-h) If set, format horizontally.
+static char cfg_format_hori   = 0; // (-H) If set, format horizontally.
 static char cfg_print_hex     = 0; // (-x) If set, print unprintable characters as hex.
 
 // TEMP:
@@ -105,8 +118,8 @@ static char cfg_print_hex     = 0; // (-x) If set, print unprintable characters 
 
 static void restore_tcattr() {
     printf("\e[?25h"); // Show cursor.
-    if (cfg_clear_trace) printf("\e[u\e[0J\e[2K"); // Clear last display, see display().
-    else for (int l = 0; l <= last_newline_count; ++l) putchar('\n');
+    if (cfg_clear_trace) printf("\e[u\e[0J\e[2K"); // Go to saved cursor pos and clear ahead and below.
+    else for (int l = 0; l <= newline_count; ++l) putchar('\n');
 
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
 }
@@ -243,6 +256,14 @@ static void run_scan() {
     }
 }
 
+static void free_posix_entries() {
+    if (posix_entries) {
+        for (int i = 0; i < entry_count; ++i) free(posix_entries[i]);
+        free(posix_entries);
+        posix_entries = NULL;
+    }
+}
+
 // TODO: Replace realpath.  We shouldn't be resolving symlinks.
 static char cd(char * to) {
     char * old_path = NULL;
@@ -267,13 +288,9 @@ static char cd(char * to) {
 
     current_dir_len = strlen(current_dir);
 
-    if (posix_entries) {
-        for (int i = 0; i < entry_count; ++i) free(posix_entries[i]);
-        free(posix_entries);
-        posix_entries = NULL;
-    }
-
+    free_posix_entries();
     run_scan();
+
     if (entry_count == -1) {
         // This "directory" (could be a file or something) failed to scan.
         // Restore old file path.
@@ -324,8 +341,7 @@ scan_for_esc:
 
 static void display() {
     struct winsize termsize;
-    int newline_count = 0; // Amount of newlines printed.
-    int next_column   = 0;
+    int next_column = 0;
     int row_before, col_before;
     int row_after,  col_after;
     struct dirent * d_child = NULL;
@@ -333,6 +349,7 @@ static void display() {
     char d_child_indicator;
     int used_chars = 0;
 
+    newline_count = 0;
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &termsize);
 
     if (posix_entries == NULL) run_scan();
@@ -340,8 +357,8 @@ static void display() {
     // Validate selection index.
 
     if (entry_count < 1) selected = 0;
-    else if (selected < SELECTED_MIN) selected = SELECTED_MAX;
-    else if (selected > SELECTED_MAX) selected = SELECTED_MIN;
+    else if (selected < SELECTED_MIN) selected = SELECTED_MIN;
+    else if (selected > SELECTED_MAX) selected = SELECTED_MAX;
 
     // Return to start of last display and erase previous.
     // 0J erases below cursor, 2K erases to the right.
@@ -371,6 +388,11 @@ static void display() {
         formatted = 0;
     }
 
+    // Calculate how many columns we have.
+    max_column = avg_columns + ENTRY_DELIM_LEN;
+    if (cfg_indicate) ++max_column;
+    max_column = termsize.ws_col / max_column;
+
     for (int i = 0; i < entry_count; ++i) {
         d_child = posix_entries[i];
         d_child_color = entry_data[i].color;
@@ -378,15 +400,8 @@ static void display() {
         used_chars = 0;
 
         if (formatted) {
-            // If we're putting entries in columns,
-            // we need to figure out where this entry should end.
-            // If it would line wrap, print a newline.
-
-            int intended_end = avg_columns + ENTRY_DELIM_LEN;
-            intended_end *= ++next_column;
-            if (cfg_indicate) ++intended_end;
-
-            if (intended_end >= termsize.ws_col) {
+            // If this entry would line wrap, print a newline.
+            if (++next_column > max_column) {
                 putchar('\n');
                 next_column = 1;
                 ++newline_count;
@@ -445,7 +460,6 @@ static void display() {
     // the terminal scrolled and we need to adjust the saved position.
 
     get_cursor_pos(&row_after, &col_after);
-    last_newline_count = newline_count;
     if (newline_count) {
         // Move cursor up to adjust for overflow and save it.
         printf("\e[%d;%df\e[s", row_after - newline_count, col_before);
@@ -484,6 +498,61 @@ static int open_selection(char * opener, int do_fork) {
         if (cfg_clear_trace) putchar('\n'); // execv might stdout buffered before clear happens.
         execv(opener, argv);
         CHECKBAD(1, 1, "%s failed to execute", opener);
+    }
+}
+
+static void handle_user_act(user_action act) {
+    switch (act) {
+    case USER_ACT_MV_UP:
+        if (!formatted) break;
+        if (selected - max_column < SELECTED_MIN) {
+            // There is no entry above, so
+            // move to the last row in the column.
+            int offset = max_column * newline_count;
+            if (selected + offset > SELECTED_MAX) offset -= max_column;
+            selected += offset;
+        } else {
+            selected -= max_column;
+        }
+        break;
+    case USER_ACT_MV_DOWN:
+        if (!formatted) break;
+        if (selected + max_column > SELECTED_MAX) {
+            // There is no entry below, so
+            // move to the first row in the column.
+            int offset = max_column * newline_count;
+            if (selected - offset < SELECTED_MIN) offset -= max_column;
+            selected -= offset;
+        } else {
+            selected += max_column;
+        }
+        break;
+    case USER_ACT_MV_LEFT:
+        if (selected == SELECTED_MIN) selected = SELECTED_MAX;
+        else --selected;
+        break;
+    case USER_ACT_MV_RIGHT:
+        if (selected == SELECTED_MAX) selected = SELECTED_MIN;
+        else ++selected;
+        break;
+    case USER_ACT_CD_PARENT:
+        cd("..");
+        break;
+    case USER_ACT_CD_SELECT:
+        cd(selected_name);
+        break;
+    case USER_ACT_CD_RELOAD:
+        free_posix_entries();
+        break;
+    case USER_ACT_ON_EDIT:
+        exit(open_selection("/usr/bin/vim", OPEN_IN_PROCESS));
+        break;
+    case USER_ACT_ON_EXEC:
+        exit(open_selection(NULL, OPEN_IN_PROCESS));
+        break;
+    case USER_ACT_ON_OPEN:
+        exit(open_selection("/usr/bin/xdg-open", OPEN_WITH_FORK));
+        break;
     }
 }
 
@@ -529,44 +598,41 @@ int main(int argc, char ** argv) {
     printf("\e[?25l\e[s"); // Hide cursor and save cursor location.
 
     display();
-redo:
+
+wait_for_user_act:
     switch (getchar()) {
-    default: goto redo;
-    case 'E': case 'e': // Edit
-        return open_selection("/usr/bin/vim", OPEN_IN_PROCESS);
-    case 'O': case 'o': // Open
-        return open_selection("/usr/bin/xdg-open", OPEN_WITH_FORK);
-    case 'X': case 'x': // eXecute
-        return open_selection(NULL, OPEN_IN_PROCESS);
-    case 'K': case 'k': // Select Parent
-        cd(".."); break;
-    case 'J': case 'j': // Select
-    case '\n':
-        cd(selected_name); break;
-    case 'H': case 'h': // Left
-        --selected; break;
-    case 'L': case 'l': // Right
-        ++selected; break;
-    case 'Q': case 'q': // Quit
-        return 0;
+    default: goto wait_for_user_act;
+    case 0x08: // BACKSPACE
+    case 0x7F: // DEL
+        handle_user_act(USER_ACT_CD_PARENT); break;
     case 0x1B: // ESC
         if (getchar() != '[') return 0; // If just escape key, quit.
 
-        // Arrow key escape codes have to be handled seperately than
-        // the above handling of ASCII keys.
         switch (getchar()) {
-        case 'A': // Select Parent (Up)
-            cd(".."); break;
-        case 'B': // Select (Down)
-            cd(selected_name); break;
-        case 'D': // Left
-            --selected; break;
-        case 'C': // Right
-            ++selected; break;
+        case 'A': // Up Arrow
+            handle_user_act(USER_ACT_MV_UP); break;
+        case 'B': // Down Arrow
+            handle_user_act(USER_ACT_MV_DOWN); break;
+        case 'C': // Right Arrow
+            handle_user_act(USER_ACT_MV_RIGHT); break;
+        case 'D': // Left Arrow
+            handle_user_act(USER_ACT_MV_LEFT); break;
         }
         break;
+    case '\n':
+        handle_user_act(USER_ACT_CD_SELECT); break;
+    case 'E': case 'e':
+        handle_user_act(USER_ACT_ON_EDIT); break;
+    case 'O': case 'o':
+        handle_user_act(USER_ACT_ON_OPEN); break;
+    case 'Q': case 'q':
+        return 0; // Quit!
+    case 'R': case 'r':
+        handle_user_act(USER_ACT_CD_RELOAD); break;
+    case 'X': case 'x':
+        handle_user_act(USER_ACT_ON_EXEC); break;
     }
 
     display();
-    goto redo;
+    goto wait_for_user_act;
 }
