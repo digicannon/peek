@@ -28,22 +28,25 @@
 #define MSG_INVALID MSG_USAGE "\nTry '%s -h' for more information.\n"
 #define MSG_HELP MSG_USAGE "\nInteractive exploration of directories on the command line.\n"              \
                            "\nFlags:\n"                                                                   \
-                           "  -a\tShow files starting with . (hidden by default)\n"                       \
+                           "  -a\tShow files starting with . (hidden by default).\n"                      \
                            "  -B\tDon't output color.\n"                                                  \
                            "  -c\tClear listing on exit.\n"                                               \
                            "  -d\tPrint current directory path before listing.\n"                         \
                            "  -F\tAppend ls style indicators to the end of entries.\n"                    \
                            "  -h\tPrint this message and exit.\n"                                         \
-                           "  -x\tPrint unprintable characters as hex.  Carriage return would be /0D/.\n" \
+                           "  -x\tPrint unprintable characters as hex.  Carriage return would be \\0D.\n" \
                            "\nKeys:\n"                                                                    \
+                           "   Backspace|Delete\tOpen parent directory.\n"                                \
+                           "   Enter           \tOpen selected directory.\n"                              \
+                           "   Up|K   \tMove cursor up.\n"                                                \
+                           "   Down|J \tMove cursor down.\n"                                              \
+                           "   Left|H \tMove cursor left.\n"                                              \
+                           "   Right|L\tMove cursor right.\n"                                             \
                            "   E\tEdit selected entry.\n"                                                 \
                            "   O\tOpen selected entry.\n"                                                 \
-                           "   X\tExecute selected entry.\n"                                              \
                            "   Q\tQuit.\n"                                                                \
-                           "   K|Up           Go up a directory.\n"                                       \
-                           "   J|Down|Enter   Open selected directory.\n"                                 \
-                           "   H|Left         Move selection left.\n"                                     \
-                           "   L|Right        Move selection right.\n"
+                           "   R\tRefresh directory listing.\n"                                           \
+                           "   X\tExecute selected entry.\n"
 #define MSG_CANT_SCAN "could not scan"
 #define MSG_EMPTY     "empty"
 
@@ -623,6 +626,14 @@ wait_for_user_act:
         handle_user_act(USER_ACT_CD_SELECT); break;
     case 'E': case 'e':
         handle_user_act(USER_ACT_ON_EDIT); break;
+    case 'H': case 'h':
+        handle_user_act(USER_ACT_MV_LEFT); break;
+    case 'J': case 'j':
+        handle_user_act(USER_ACT_MV_DOWN); break;
+    case 'K': case 'k':
+        handle_user_act(USER_ACT_MV_UP); break;
+    case 'L': case 'l':
+        handle_user_act(USER_ACT_MV_RIGHT); break;
     case 'O': case 'o':
         handle_user_act(USER_ACT_ON_OPEN); break;
     case 'Q': case 'q':
