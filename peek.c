@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,7 +122,7 @@ static char cfg_print_hex     = 0; // (-x) If set, print unprintable characters 
 
 static void restore_tcattr() {
     printf("\e[?25h"); // Show cursor.
-    if (cfg_clear_trace) printf("\e[u\e[0J\e[2K"); // Go to saved cursor pos and clear ahead and below.
+    if (cfg_clear_trace) printf("\e[0J\e[2K"); // Go to saved cursor pos and clear ahead and below.
     else for (int l = 0; l <= newline_count; ++l) putchar('\n');
 
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
@@ -366,7 +367,7 @@ static void display() {
     // Return to start of last display and erase previous.
     // 0J erases below cursor, 2K erases to the right.
 
-    printf("\e[u\e[0J\e[2K");
+    printf("\e[0J\e[2K");
     get_cursor_pos(&row_before, &col_before);
 
     // If enabled, print current directory name.
@@ -459,13 +460,13 @@ static void display() {
         printf(ENTRY_DELIM);
     }
 
-    // If the lines overflowed does not match the difference in cursor height,
-    // the terminal scrolled and we need to adjust the saved position.
-
-    get_cursor_pos(&row_after, &col_after);
     if (newline_count) {
-        // Move cursor up to adjust for overflow and save it.
-        printf("\e[%d;%df\e[s", row_after - newline_count, col_before);
+        // The terminal may have scrolled and we need to adjust the saved position.
+        // Move cursor up to adjust for possible overflow and save it.
+        get_cursor_pos(&row_after, &col_after);
+        printf("\e[%d;%df", row_after - newline_count, col_before);
+    } else {
+        printf("\e[%d;%df", row_before, col_before);
     }
 }
 
@@ -591,14 +592,15 @@ int main(int argc, char ** argv) {
     tcgetattr(STDIN_FILENO, &tcattr_old);
     atexit(restore_tcattr); // Restore old mode when we're done.
     memcpy(&tcattr_raw, &tcattr_old, sizeof(struct termios));
-    tcattr_raw.c_cc[VMIN]  = 0;
+    tcattr_raw.c_cc[VMIN]  = 1;
     tcattr_raw.c_cc[VTIME] = 0;
     tcattr_raw.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
+    printf("\e[?25l"); // Hide cursor.
+
 #if DEBUG
     printf("Dev Build %s %s\e[K\n", __DATE__, __TIME__);
 #endif
-    printf("\e[?25l\e[s"); // Hide cursor and save cursor location.
 
     display();
 
