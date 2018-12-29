@@ -87,6 +87,13 @@ typedef struct peek_entry {
     char indicator;
 } peek_entry;
 
+enum prompt_t {
+    PROMPT_NONE,
+    PROMPT_ERR,
+    PROMPT_MSG,
+    PROMPT_FOR,
+} prompt = PROMPT_NONE;
+
 static char * current_dir = NULL;
 static int current_dir_len = 0;
 
@@ -109,13 +116,13 @@ static char selected_name[SELECTED_MAXLEN];
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
 
-static char cfg_show_dotfiles = 0; // (-a) If set, files starting with . will be shown.
-static char cfg_color         = 1; // (-B) If set, color output.  -B unsets this.
-static char cfg_clear_trace   = 0; // (-c) If set, clear displayed text on exit.
-static char cfg_show_dir      = 0; // (-d) If set, print current dir before listing.
-static char cfg_indicate      = 0; // (-F) If set, append indicators to entries.
-static char cfg_format_hori   = 0; // (-H) If set, format horizontally.
-static char cfg_print_hex     = 0; // (-x) If set, print unprintable characters as hex.
+static char cfg_show_dotfiles = 0; //  (-a) If set, files starting with . will be shown.
+static char cfg_color         = 1; // !(-B) If set, color output.
+static char cfg_clear_trace   = 0; //  (-c) If set, clear displayed text on exit.
+static char cfg_show_dir      = 1; // !(-d) If set, print current dir before listing.
+static char cfg_indicate      = 0; //  (-F) If set, append indicators to entries.
+static char cfg_format_hori   = 0; //  (-H) If set, format horizontally.
+static char cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
 
 // TEMP:
 #define CHECKBAD(val, err, msg, ...) if (val) { putchar('\n'); fprintf(stderr, msg, __VA_ARGS__); exit(err); }
@@ -217,7 +224,7 @@ static void run_scan() {
     int len = 0;
 
     entry_count = scandir(current_dir, &posix_entries, display_filter, alphasort);
-    if (entry_count == -1) {
+    if (entry_count <= 0) {
         selected_name[0] = 0;
         return;
     }
@@ -347,7 +354,6 @@ static void display() {
     struct winsize termsize;
     int next_column = 0;
     int row_before, col_before;
-    int row_after,  col_after;
     struct dirent * d_child = NULL;
     const char * d_child_color;
     char d_child_indicator;
@@ -368,14 +374,17 @@ static void display() {
     // 0J erases below cursor, 2K erases to the right.
 
     printf("\e[0J\e[2K");
-    get_cursor_pos(&row_before, &col_before);
 
     // If enabled, print current directory name.
 
     if (cfg_show_dir) {
-        printf(COLOR_INVERT COLOR_BOLD "%s" COLOR_RESET "\n", current_dir);
-        ++newline_count;
+        printf(COLOR_INVERT COLOR_BOLD "%s", current_dir);
+        if (current_dir[0] != 0 && current_dir[0] != 0) putchar('/');
     }
+
+    get_cursor_pos(&row_before, &col_before);
+    printf(COLOR_RESET "\n");
+    ++newline_count;
 
     printf(COLOR_RESET);
 
@@ -463,11 +472,31 @@ static void display() {
     if (newline_count) {
         // The terminal may have scrolled and we need to adjust the saved position.
         // Move cursor up to adjust for possible overflow and save it.
-        get_cursor_pos(&row_after, &col_after);
-        printf("\e[%d;%df", row_after - newline_count, col_before);
-    } else {
-        printf("\e[%d;%df", row_before, col_before);
+        int row_after;
+        get_cursor_pos(&row_after, NULL);
+        row_before = row_after - newline_count;
     }
+
+    // Go back to status bar and print selection name and prompt.
+
+    printf("\e[%d;%df", row_before, col_before);
+    printf(COLOR_BOLD "%s" COLOR_RESET, selected_name);
+
+    switch (prompt) {
+    case PROMPT_ERR:
+        printf("\e[31m"); // Foreground color red.
+    case PROMPT_MSG:
+        printf(ENTRY_DELIM "A prompt!" COLOR_RESET);
+        break;
+    case PROMPT_FOR:
+        printf(ENTRY_DELIM ":%s", "A command!");
+        break;
+    default: break;
+    }
+
+    // Return to starting row for next display.
+
+    printf("\e[%d;%df", row_before, 0);
 }
 
 static int open_selection(char * opener, int do_fork) {
@@ -512,7 +541,7 @@ static void handle_user_act(user_action act) {
         if (selected - max_column < SELECTED_MIN) {
             // There is no entry above, so
             // move to the last row in the column.
-            int offset = max_column * newline_count;
+            int offset = max_column * (newline_count - 1);
             if (selected + offset > SELECTED_MAX) offset -= max_column;
             selected += offset;
         } else {
@@ -524,7 +553,7 @@ static void handle_user_act(user_action act) {
         if (selected + max_column > SELECTED_MAX) {
             // There is no entry below, so
             // move to the first row in the column.
-            int offset = max_column * newline_count;
+            int offset = max_column * (newline_count - 1);
             if (selected - offset < SELECTED_MIN) offset -= max_column;
             selected -= offset;
         } else {
@@ -532,11 +561,11 @@ static void handle_user_act(user_action act) {
         }
         break;
     case USER_ACT_MV_LEFT:
-        if (selected == SELECTED_MIN) selected = SELECTED_MAX;
+        if (selected % max_column == 0) selected += max_column - 1;
         else --selected;
         break;
     case USER_ACT_MV_RIGHT:
-        if (selected == SELECTED_MAX) selected = SELECTED_MIN;
+        if (selected % max_column == max_column - 1) selected -= max_column - 1;
         else ++selected;
         break;
     case USER_ACT_CD_PARENT:
@@ -570,7 +599,7 @@ int main(int argc, char ** argv) {
     case 'a': cfg_show_dotfiles = 1; break;
     case 'B': cfg_color         = 0; break;
     case 'c': cfg_clear_trace   = 1; break;
-    case 'd': cfg_show_dir      = 1; break;
+    case 'd': cfg_show_dir      = 0; break;
     case 'F': cfg_indicate      = 1; break;
     case 'x': cfg_print_hex     = 1; break;
     case 'h': printf(MSG_HELP, argv[0]); return 0;
