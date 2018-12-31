@@ -561,12 +561,40 @@ static void handle_user_act(user_action act) {
         }
         break;
     case USER_ACT_MV_LEFT:
-        if (selected % max_column == 0) selected += max_column - 1;
-        else --selected;
+        if (formatted) {
+            // Check for cursor wrap by column.
+            if (selected % max_column == 0) {
+                selected += max_column - 1;
+            } else {
+                --selected;
+            }
+        } else {
+            // Check for cursor wrap on a one-line display.
+            if (selected - 1 < SELECTED_MIN) {
+                selected = SELECTED_MAX;
+            } else {
+                --selected;
+            }
+        }
         break;
     case USER_ACT_MV_RIGHT:
-        if (selected % max_column == max_column - 1) selected -= max_column - 1;
-        else ++selected;
+        if (formatted) {
+            // Check for cursor wrap by column.
+            if (selected + 1 > SELECTED_MAX) {
+                selected -= selected % max_column;
+            } else if (selected % max_column == max_column - 1) {
+                selected -= max_column - 1;
+            } else {
+                ++selected;
+            }
+        } else {
+            // Check for cursor wrap on a one-line display.
+            if (selected + 1 > SELECTED_MAX) {
+                selected = SELECTED_MIN;
+            } else {
+                ++selected;
+            }
+        }
         break;
     case USER_ACT_CD_PARENT:
         cd("..");
