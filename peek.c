@@ -37,15 +37,15 @@
                            "  -h\tPrint this message and exit.\n"                                         \
                            "  -x\tPrint unprintable characters as hex.  Carriage return would be \\0D.\n" \
                            "\nKeys:\n"                                                                    \
-                           "   Backspace|Delete\tOpen parent directory.\n"                                \
-                           "   Enter           \tOpen selected directory.\n"                              \
+                           "   F10|Q \tQuit.\n"                                                           \
+                           "   BS|DEL\tOpen parent directory.\n"                                          \
+                           "   Enter \tOpen selected directory.\n"                                        \
                            "   Up|K   \tMove cursor up.\n"                                                \
                            "   Down|J \tMove cursor down.\n"                                              \
                            "   Left|H \tMove cursor left.\n"                                              \
                            "   Right|L\tMove cursor right.\n"                                             \
                            "   E\tEdit selected entry.\n"                                                 \
                            "   O\tOpen selected entry.\n"                                                 \
-                           "   Q\tQuit.\n"                                                                \
                            "   R\tRefresh directory listing.\n"                                           \
                            "   X\tExecute selected entry.\n"
 #define MSG_CANT_SCAN "could not scan"
@@ -405,6 +405,11 @@ static void display() {
     printf(COLOR_RESET "\n");
     ++newline_count;
 
+#if DEBUG
+    printf("Dev Build %s %s\n", __DATE__, __TIME__);
+    ++newline_count;
+#endif
+
     printf(COLOR_RESET);
 
     if (entry_count < 0) {
@@ -668,10 +673,6 @@ int main(int argc, char ** argv) {
     tcattr_raw.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
     printf("\e[?25l"); // Hide cursor.
-
-#if DEBUG
-    printf("Dev Build %s %s\e[K\n", __DATE__, __TIME__);
-#endif
 
 display_then_wait:
     display();
