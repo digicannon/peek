@@ -52,8 +52,8 @@
 #define MSG_EMPTY     "empty"
 
 // 8.3 was FAT's max filename.  That sounds like a good minimum.
-#define MIN_ENTRY_LEN 13
-#define ENTRY_DELIM "  "
+#define MIN_ENTRY_LEN   13
+#define ENTRY_DELIM     "  "
 #define ENTRY_DELIM_LEN 2
 
 // UTF8: If 8th bit is set, this code point is multiple bytes.
@@ -65,8 +65,23 @@
 // A character is printable if above the controls and not DEL.
 #define UTF8_PRINTABLE(c) (c > 0x1F && c != 0x7F)
 
-#define OPEN_IN_PROCESS 0
-#define OPEN_WITH_FORK  1
+// The program to open files.  OS dependant.
+#ifndef EXEC_NAME_OPENER
+    #if defined(__CYGWIN__)
+        #define EXEC_NAME_OPENER "cygstart"
+    #elif defined(__APPLE__) && defined(__MACH__)
+        #define EXEC_NAME_OPENER "open"
+    #elif defined(__unix__)
+        #define EXEC_NAME_OPENER "xdg-open"
+    #else
+        #define EXEC_NAME_OPENER NULL
+    #endif
+#endif
+
+// The program to edit files in the terminal.
+#ifndef EXEC_NAME_EDITOR
+    #define EXEC_NAME_EDITOR "vim"
+#endif
 
 typedef enum user_action {
     USER_ACT_MV_UP,
@@ -101,11 +116,11 @@ static struct dirent ** posix_entries = NULL;
 static peek_entry * entry_data = NULL;
 static int entry_count = 0;   // Number of entries in current dir.
 
-static int avg_columns   = 0; // Average output length of entries.
-static int total_length  = 0; // Length of output without newlines.
-static char formatted    = 1; // If set, output will do column formatting.
-static int max_column    = 0; // Number of format columns printed by last display.
-static int newline_count = 0; // Number of lines printed by last display.
+static int  avg_columns   = 0; // Average output length of entries.
+static int  total_length  = 0; // Length of output without newlines.
+static char formatted     = 1; // If set, output will do column formatting.
+static int  max_column    = 0; // Number of format columns printed by last display.
+static int  newline_count = 0; // Number of lines printed by last display.
 
 #define SELECTED_MIN 0
 #define SELECTED_MAX (entry_count - 1)
@@ -129,7 +144,7 @@ static char cfg_print_hex     = 0; //  (-x) If set, print unprintable characters
 
 static void restore_tcattr() {
     printf("\e[?25h"); // Show cursor.
-    if (cfg_clear_trace) printf("\e[0J\e[2K"); // Go to saved cursor pos and clear ahead and below.
+    if (cfg_clear_trace) printf("\e[0J\e[2K"); // Clear ahead and below.
     else for (int l = 0; l <= newline_count; ++l) putchar('\n');
 
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
@@ -316,9 +331,14 @@ static char cd(char * to) {
     return 1;
 }
 
+static int get_stdin_chars_ahead() {
+    int ahead;
+    ioctl(STDIN_FILENO, FIONREAD, &ahead);
+    return ahead;
+}
+
 // NOTE: This will eat everything in stdin.
 static void get_cursor_pos(int * row, int * col) {
-    int ahead = 0;
     char c;
 
     if (row) *row = 0;
@@ -326,8 +346,7 @@ static void get_cursor_pos(int * row, int * col) {
 
     // Attempt to clear out stdin.
     // CLEANUP: Is read with a NULL buffer really allowed?
-    ioctl(STDIN_FILENO, FIONREAD, &ahead);
-    read(STDIN_FILENO, NULL, ahead);
+    read(STDIN_FILENO, NULL, get_stdin_chars_ahead());
 
     // Request cursor position and scan for the response "\e[%d;%dR".
     // If we read in something that started out correct and became malformed,
@@ -499,7 +518,7 @@ static void display() {
     printf("\e[%d;%df", row_before, 0);
 }
 
-static int open_selection(char * opener, int do_fork) {
+static int open_selection(char * opener) {
     char * argv[3] = {0};
     char * selected_path;
     pid_t pid;
@@ -515,22 +534,17 @@ static int open_selection(char * opener, int do_fork) {
         argv[1] = selected_path;
     }
 
-    if (do_fork) {
-        pid = fork();
+    pid = fork();
 
-        if (pid > 0) {
-            return 0;
-        } else if (pid == 0) {
-            execv(opener, argv);
-            CHECKBAD(1, 1, "%s failed to execute", opener);
-        } else {
-            CHECKBAD(1, 1, "Could not start process for %s", opener);
-        }
-    } else {
-        restore_tcattr(); // atexit won't call this since we are overwriting this process.
-        if (cfg_clear_trace) putchar('\n'); // execv might stdout buffered before clear happens.
-        execv(opener, argv);
+    if (pid > 0) {
+        wait(NULL);
+        return 0;
+    } else if (pid == 0) {
+        execvp(opener, argv);
         CHECKBAD(1, 1, "%s failed to execute", opener);
+    } else {
+        CHECKBAD(1, 1, "Could not start process for %s", opener);
+        return 1;
     }
 }
 
@@ -606,13 +620,13 @@ static void handle_user_act(user_action act) {
         free_posix_entries();
         break;
     case USER_ACT_ON_EDIT:
-        exit(open_selection("/usr/bin/vim", OPEN_IN_PROCESS));
+        open_selection(EXEC_NAME_EDITOR);
         break;
     case USER_ACT_ON_EXEC:
-        exit(open_selection(NULL, OPEN_IN_PROCESS));
+        open_selection(NULL);
         break;
     case USER_ACT_ON_OPEN:
-        exit(open_selection("/usr/bin/xdg-open", OPEN_WITH_FORK));
+        open_selection(EXEC_NAME_OPENER);
         break;
     }
 }
@@ -659,6 +673,7 @@ int main(int argc, char ** argv) {
     printf("Dev Build %s %s\e[K\n", __DATE__, __TIME__);
 #endif
 
+display_then_wait:
     display();
 
 wait_for_user_act:
@@ -666,43 +681,65 @@ wait_for_user_act:
     default: goto wait_for_user_act;
     case 0x08: // BACKSPACE
     case 0x7F: // DEL
-        handle_user_act(USER_ACT_CD_PARENT); break;
+        handle_user_act(USER_ACT_CD_PARENT);
+        break;
     case 0x1B: // ESC
-        if (getchar() != '[') return 0; // If just escape key, quit.
-
+        // Eat escape sequence start, then match the code.
+        getchar();
         switch (getchar()) {
+        case '2': // Possible F9-F12.
+            // F10 is "^[[21~".
+            if (getchar() == '1' && getchar() == '~') {
+                goto quit;
+            }
+            break;
         case 'A': // Up Arrow
-            handle_user_act(USER_ACT_MV_UP); break;
+            handle_user_act(USER_ACT_MV_UP);
+            break;
         case 'B': // Down Arrow
-            handle_user_act(USER_ACT_MV_DOWN); break;
+            handle_user_act(USER_ACT_MV_DOWN);
+            break;
         case 'C': // Right Arrow
-            handle_user_act(USER_ACT_MV_RIGHT); break;
+            handle_user_act(USER_ACT_MV_RIGHT);
+            break;
         case 'D': // Left Arrow
-            handle_user_act(USER_ACT_MV_LEFT); break;
+            handle_user_act(USER_ACT_MV_LEFT);
+            break;
         }
         break;
     case '\n':
-        handle_user_act(USER_ACT_CD_SELECT); break;
+        handle_user_act(USER_ACT_CD_SELECT);
+        break;
     case 'E': case 'e':
-        handle_user_act(USER_ACT_ON_EDIT); break;
+        handle_user_act(USER_ACT_ON_EDIT);
+        break;
     case 'H': case 'h':
-        handle_user_act(USER_ACT_MV_LEFT); break;
+        handle_user_act(USER_ACT_MV_LEFT);
+        break;
     case 'J': case 'j':
-        handle_user_act(USER_ACT_MV_DOWN); break;
+        handle_user_act(USER_ACT_MV_DOWN);
+        break;
     case 'K': case 'k':
-        handle_user_act(USER_ACT_MV_UP); break;
+        handle_user_act(USER_ACT_MV_UP);
+        break;
     case 'L': case 'l':
-        handle_user_act(USER_ACT_MV_RIGHT); break;
+        handle_user_act(USER_ACT_MV_RIGHT);
+        break;
     case 'O': case 'o':
-        handle_user_act(USER_ACT_ON_OPEN); break;
+        handle_user_act(USER_ACT_ON_OPEN);
+        break;
     case 'Q': case 'q':
-        return 0; // Quit!
+        goto quit;
     case 'R': case 'r':
-        handle_user_act(USER_ACT_CD_RELOAD); break;
+        handle_user_act(USER_ACT_CD_RELOAD);
+        break;
     case 'X': case 'x':
-        handle_user_act(USER_ACT_ON_EXEC); break;
+        handle_user_act(USER_ACT_ON_EXEC);
+        break;
     }
 
-    display();
-    goto wait_for_user_act;
+    goto display_then_wait;
+
+quit:
+    return 0;
 }
