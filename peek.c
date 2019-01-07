@@ -398,7 +398,7 @@ static void display() {
 
     if (cfg_show_dir) {
         printf(COLOR_INVERT COLOR_BOLD "%s", current_dir);
-        if (current_dir[0] != 0 && current_dir[0] != 0) putchar('/');
+        if (current_dir[0] != 0 && current_dir[1] != 0) putchar('/');
     }
 
     get_cursor_pos(&row_before, &col_before);
