@@ -140,6 +140,9 @@ static int selected_previously;
 #define SELECTED_MAXLEN 256
 static char selected_name[SELECTED_MAXLEN];
 
+#define PROMPT_MAXLEN 80
+static char prompt_buffer[PROMPT_MAXLEN];
+
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
 static struct winsize termsize;
@@ -151,9 +154,6 @@ static char cfg_show_dir      = 1; // !(-d) If set, print current dir before lis
 static char cfg_indicate      = 0; //  (-F) If set, append indicators to entries.
 static char cfg_format_hori   = 0; //  (-H) If set, format horizontally.
 static char cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
-
-// TEMP:
-#define CHECKBAD(val, err, msg, ...) if (val) { putchar('\n'); fprintf(stderr, msg, __VA_ARGS__); exit(err); }
 
 static void restore_tcattr() {
     printf("\e[?25h"); // Show cursor.
@@ -198,9 +198,7 @@ static char * append_to_cd(char * to, char * suffix) {
     size_t suffix_len = strlen(suffix);
     size_t to_len = current_dir_len + suffix_len + 2;
 
-    CHECKBAD(to_len > PATH_MAX, 1, "%s/%s is too long of a path!", to, suffix);
     if (to == NULL) to = malloc(sizeof(*current_dir) * to_len);
-    CHECKBAD(to == NULL, 1, "Out of memory!%c", 0);
 
     memcpy(to, current_dir, sizeof(*current_dir) * current_dir_len);
     to[current_dir_len] = '/';
@@ -313,12 +311,12 @@ static char cd(char * to) {
 
     if (current_dir) {
         // Only provide fallback if this is not the initial path.
-        old_path = malloc(sizeof(*old_path) * PATH_MAX);
-        memcpy(old_path, current_dir, sizeof(*old_path) * PATH_MAX);
+        old_path = malloc(sizeof(*old_path) * old_len);
+        memcpy(old_path, current_dir, sizeof(*old_path) * old_len);
     }
 
     if (current_dir == NULL) {
-        current_dir = malloc(sizeof(*current_dir) * PATH_MAX);
+        current_dir = malloc(sizeof(*current_dir) * current_dir_len);
         realpath(to, current_dir);
     } else if (to[0] == '/') {
         realpath(to, current_dir);
@@ -583,10 +581,11 @@ static void refresh_display() {
     case PROMPT_ERR:
         printf("\e[31m"); // Foreground color red.
     case PROMPT_MSG:
-        printf(ENTRY_DELIM "A prompt!" COLOR_RESET);
+        printf(ENTRY_DELIM "%s" COLOR_RESET, prompt_buffer);
+        prompt = PROMPT_NONE;
         break;
     case PROMPT_FOR:
-        printf(ENTRY_DELIM ":%s", "A command!");
+        printf(ENTRY_DELIM ":%s", prompt_buffer);
         break;
     default: break;
     }
@@ -596,7 +595,7 @@ static void refresh_display() {
     printf("\e[%d;%df", pos_status_bar.row, 0);
 }
 
-static int open_selection(char * opener) {
+static void open_selection(char * opener) {
     char * argv[3] = {0};
     char * selected_path;
     pid_t pid;
@@ -616,14 +615,15 @@ static int open_selection(char * opener) {
 
     if (pid > 0) {
         wait(NULL);
-        return 0;
     } else if (pid == 0) {
         execvp(opener, argv);
-        CHECKBAD(1, 1, "%s failed to execute", opener);
-    } else {
-        CHECKBAD(1, 1, "Could not start process for %s", opener);
-        return 1;
+        // If we got here, execvp failed.
+        exit(1);
     }
+
+    // Make sure our terminal attributes are still active.
+    printf("\e[?25l"); // Hide cursor.
+    tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
 }
 
 static void handle_user_act(user_action act) {
