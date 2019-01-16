@@ -96,10 +96,17 @@ typedef enum user_action {
     USER_ACT_ON_OPEN,
 } user_action;
 
+typedef struct termpos {
+    int row;
+    int col;
+} termpos;
+
 typedef struct peek_entry {
     int len; // Printed UTF8 length, not number of bytes.
     const char * color;
     char indicator;
+    int row;
+    int col;
 } peek_entry;
 
 enum prompt_t {
@@ -109,12 +116,16 @@ enum prompt_t {
     PROMPT_FOR,
 } prompt = PROMPT_NONE;
 
-static char * current_dir = NULL;
-static int current_dir_len = 0;
+static char * current_dir     = NULL;
+static int    current_dir_len = 0;
 
 static struct dirent ** posix_entries = NULL;
-static peek_entry * entry_data = NULL;
-static int entry_count = 0;   // Number of entries in current dir.
+static peek_entry *     entry_data    = NULL;
+static int              entry_count   = 0; // Number of entries in current dir.
+
+static char    display_is_dirty = 1; // Force display redraw when true.
+static termpos pos_status_bar;       // Column is the start of the selection name.
+static int     entry_row_offset = 0;
 
 static int  avg_columns   = 0; // Average output length of entries.
 static int  total_length  = 0; // Length of output without newlines.
@@ -125,11 +136,13 @@ static int  newline_count = 0; // Number of lines printed by last display.
 #define SELECTED_MIN 0
 #define SELECTED_MAX (entry_count - 1)
 static int selected = SELECTED_MIN;
+static int selected_previously;
 #define SELECTED_MAXLEN 256
 static char selected_name[SELECTED_MAXLEN];
 
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
+static struct winsize termsize;
 
 static char cfg_show_dotfiles = 0; //  (-a) If set, files starting with . will be shown.
 static char cfg_color         = 1; // !(-B) If set, color output.
@@ -237,6 +250,9 @@ static void run_scan() {
     int old_entry_count = entry_count;
     int longest_entry_len = 0;
     int len = 0;
+
+    // The next refresh needs to know that the data on screen is no longer valid.
+    display_is_dirty = 1;
 
     entry_count = scandir(current_dir, &posix_entries, display_filter, alphasort);
     if (entry_count <= 0) {
@@ -369,25 +385,77 @@ scan_for_esc:
     }
 }
 
-static void display() {
-    struct winsize termsize;
-    int next_column = 0;
-    int row_before, col_before;
-    struct dirent * d_child = NULL;
-    const char * d_child_color;
-    char d_child_indicator;
-    int used_chars = 0;
-
-    newline_count = 0;
-    ioctl(STDOUT_FILENO, TIOCGWINSZ, &termsize);
-
-    if (posix_entries == NULL) run_scan();
-
-    // Validate selection index.
-
+// Make sure the selection isn't out of bounds.
+// Used in renew_display and refresh_display.
+static void validate_selection_index() {
     if (entry_count < 1) selected = 0;
     else if (selected < SELECTED_MIN) selected = SELECTED_MIN;
     else if (selected > SELECTED_MAX) selected = SELECTED_MAX;
+}
+
+static int write_entry(int index) {
+    struct dirent * d_child           = posix_entries[index];
+    const char *    d_child_color     = entry_data[index].color;
+    char            d_child_indicator = entry_data[index].indicator;
+
+    int used_chars = 0;
+    int char_len;
+
+    // If enabled, print the corresponding color for the type.
+    if (d_child_color) printf("%s", d_child_color);
+    
+    // Print the name of the entry.
+    for (unsigned char * c = (unsigned char *)d_child->d_name; *c; ++c) {
+        char_len = utf8_char_len(*c);
+        used_chars += char_len;
+        
+        if (formatted) {
+            // Stop early for end of column.
+
+            if (used_chars >= (d_child_indicator ? avg_columns - 1 : avg_columns)) {
+                // Replace last character with truncation indictaor.
+                printf(COLOR_RESET "~");
+                if (char_len == 3) used_chars -= 2;
+                break;
+            }
+        }
+
+        // This character is printable if
+        // it is above control characters and not DEL.
+        if (UTF8_PRINTABLE(*c)) {
+            putchar(*c);
+        } else if (cfg_print_hex) {
+            printf("\\%02X", (unsigned char)*c);
+        }
+    }
+
+    printf(COLOR_RESET);
+
+    // If enabled, print the corresponding indicator for the type.
+    if (d_child_indicator) {
+        putchar(d_child_indicator);
+        ++used_chars;
+    }
+
+    if (formatted) {
+        for (; used_chars < avg_columns; ++used_chars) putchar(' ');
+    }
+    used_chars += printf(ENTRY_DELIM);
+
+    return used_chars;
+}
+
+static void renew_display() {
+    // If formatting, this will be the next format column to use.
+    // If not, this will be the amount of characters printed so far.
+    //                          (literally the next terminal column)
+    int next_column = 0;
+
+    newline_count = 0;
+
+    if (posix_entries == NULL) run_scan();
+
+    validate_selection_index();
 
     // Return to start of last display and erase previous.
     // 0J erases below cursor, 2K erases to the right.
@@ -401,7 +469,7 @@ static void display() {
         if (current_dir[0] != 0 && current_dir[1] != 0) putchar('/');
     }
 
-    get_cursor_pos(&row_before, &col_before);
+    get_cursor_pos(&pos_status_bar.row, &pos_status_bar.col);
     printf(COLOR_RESET "\n");
     ++newline_count;
 
@@ -409,6 +477,8 @@ static void display() {
     printf("Dev Build %s %s\n", __DATE__, __TIME__);
     ++newline_count;
 #endif
+
+    entry_row_offset = newline_count;
 
     printf(COLOR_RESET);
 
@@ -431,11 +501,6 @@ static void display() {
     max_column = termsize.ws_col / max_column;
 
     for (int i = 0; i < entry_count; ++i) {
-        d_child = posix_entries[i];
-        d_child_color = entry_data[i].color;
-        d_child_indicator = entry_data[i].indicator;
-        used_chars = 0;
-
         if (formatted) {
             // If this entry would line wrap, print a newline.
             if (++next_column > max_column) {
@@ -445,52 +510,24 @@ static void display() {
             }
         }
 
+        // If this is the currently selected entry,
+        // copy the name into the selected name buffer and highlight it.
         if (i == selected) {
-            // Copy the name into the selected_name buffer for possible cd request.
-            memcpy(selected_name, d_child->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
+            memcpy(selected_name, posix_entries[i]->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
             printf(COLOR_INVERT);
         }
 
-        // If enabled, print the corresponding color for the type.
-        if (d_child_color) printf("%s", d_child_color);
-
-        // Print the name of the entry.
-        for (unsigned char * c = (unsigned char *)d_child->d_name; *c; ++c) {
-            if (formatted) {
-                // Stop early for end of column.
-
-                int len = utf8_char_len(*c);
-                used_chars += len;
-
-                if (used_chars >= (d_child_indicator ? avg_columns - 1 : avg_columns)) {
-                    // Replace last character with truncation indictaor.
-                    printf(COLOR_RESET "~");
-                    if (len == 3) used_chars -= 2;
-                    break;
-                }
-            }
-
-            // This character is printable if
-            // it is above control characters and not DEL.
-            if (UTF8_PRINTABLE(*c)) {
-                putchar(*c);
-            } else if (cfg_print_hex) {
-                printf("\\%02X", (unsigned char)*c);
-            }
-        }
-
-        printf(COLOR_RESET);
-
-        // If enabled, print the corresponding indicator for the type.
-        if (d_child_indicator) {
-            putchar(d_child_indicator);
-            ++used_chars;
-        }
+        // Save cursor position for later use.
 
         if (formatted) {
-            for (; used_chars < avg_columns; ++used_chars) putchar(' ');
+            entry_data[i].row = i / max_column + entry_row_offset;
+            entry_data[i].col = i % max_column * (avg_columns + ENTRY_DELIM_LEN) + 1;
+            write_entry(i);
+        } else {
+            entry_data[i].row = entry_row_offset;
+            entry_data[i].col = next_column + 1;
+            next_column += write_entry(i);
         }
-        printf(ENTRY_DELIM);
     }
 
     if (newline_count) {
@@ -498,12 +535,48 @@ static void display() {
         // Move cursor up to adjust for possible overflow and save it.
         int row_after;
         get_cursor_pos(&row_after, NULL);
-        row_before = row_after - newline_count;
+        pos_status_bar.row = row_after - newline_count;
+    }
+}
+
+static void refresh_display() {
+    struct winsize new_termsize;
+
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &new_termsize);
+
+    if (display_is_dirty
+        || new_termsize.ws_row != termsize.ws_row
+        || new_termsize.ws_col != termsize.ws_col) {
+        // The terminal size changed
+        // or the display info is incorrect
+        // so we need to completely redraw.
+
+        termsize = new_termsize;
+        renew_display();
+        display_is_dirty = 0;
+    } else {
+        // Reflect changes in entry selection.
+
+        validate_selection_index();
+
+        if (entry_count >= 1) {
+            memcpy(selected_name, posix_entries[selected]->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
+
+            printf("\e[%d;%df" COLOR_RESET,
+                   entry_data[selected_previously].row + pos_status_bar.row,
+                   entry_data[selected_previously].col);
+            write_entry(selected_previously);
+
+            printf("\e[%d;%df" COLOR_INVERT,
+                   entry_data[selected].row + pos_status_bar.row,
+                   entry_data[selected].col);
+            write_entry(selected);
+        }
     }
 
-    // Go back to status bar and print selection name and prompt.
+    // Update status bar.
 
-    printf("\e[%d;%df", row_before, col_before);
+    printf("\e[%d;%df\e[0K", pos_status_bar.row, pos_status_bar.col);
     printf(COLOR_BOLD "%s" COLOR_RESET, selected_name);
 
     switch (prompt) {
@@ -520,7 +593,7 @@ static void display() {
 
     // Return to starting row for next display.
 
-    printf("\e[%d;%df", row_before, 0);
+    printf("\e[%d;%df", pos_status_bar.row, 0);
 }
 
 static int open_selection(char * opener) {
@@ -554,6 +627,10 @@ static int open_selection(char * opener) {
 }
 
 static void handle_user_act(user_action act) {
+    if (act >= USER_ACT_MV_UP && act <= USER_ACT_MV_RIGHT) {
+        selected_previously = selected;
+    }
+
     switch (act) {
     case USER_ACT_MV_UP:
         if (!formatted) break;
@@ -675,7 +752,7 @@ int main(int argc, char ** argv) {
     printf("\e[?25l"); // Hide cursor.
 
 display_then_wait:
-    display();
+    refresh_display();
 
 wait_for_user_act:
     switch (getchar()) {
