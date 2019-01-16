@@ -20,9 +20,12 @@
 #endif
 #endif
 
-#define COLOR_RESET  "\e[m"
-#define COLOR_BOLD   "\e[1m"
-#define COLOR_INVERT "\e[7m"
+#define ANSI_RESET  "\e[m"
+#define ANSI_BOLD   "\e[1m"
+#define ANSI_INVERT "\e[7m"
+
+#define ANSI_SHOW_CURSOR "\e[?25h"
+#define ANSI_HIDE_CURSOR "\e[?25l"
 
 #define SHORT_FLAGS "aBcdFhx"
 #define MSG_USAGE   "Usage: %s [-" SHORT_FLAGS "] [<directory>]"
@@ -156,7 +159,7 @@ static char cfg_format_hori   = 0; //  (-H) If set, format horizontally.
 static char cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
 
 static void restore_tcattr() {
-    printf("\e[?25h"); // Show cursor.
+    printf(ANSI_SHOW_CURSOR);
     if (cfg_clear_trace) printf("\e[0J\e[2K"); // Clear ahead and below.
     else for (int l = 0; l <= newline_count; ++l) putchar('\n');
 
@@ -412,7 +415,7 @@ static int write_entry(int index) {
 
             if (used_chars >= (d_child_indicator ? avg_columns - 1 : avg_columns)) {
                 // Replace last character with truncation indictaor.
-                printf(COLOR_RESET "~");
+                printf(ANSI_RESET "~");
                 if (char_len == 3) used_chars -= 2;
                 break;
             }
@@ -427,7 +430,7 @@ static int write_entry(int index) {
         }
     }
 
-    printf(COLOR_RESET);
+    printf(ANSI_RESET);
 
     // If enabled, print the corresponding indicator for the type.
     if (d_child_indicator) {
@@ -463,12 +466,12 @@ static void renew_display() {
     // If enabled, print current directory name.
 
     if (cfg_show_dir) {
-        printf(COLOR_INVERT COLOR_BOLD "%s", current_dir);
+        printf(ANSI_INVERT ANSI_BOLD "%s", current_dir);
         if (current_dir[0] != 0 && current_dir[1] != 0) putchar('/');
     }
 
     get_cursor_pos(&pos_status_bar.row, &pos_status_bar.col);
-    printf(COLOR_RESET "\n");
+    printf(ANSI_RESET "\n");
     ++newline_count;
 
 #if DEBUG
@@ -478,14 +481,14 @@ static void renew_display() {
 
     entry_row_offset = newline_count;
 
-    printf(COLOR_RESET);
+    printf(ANSI_RESET);
 
     if (entry_count < 0) {
         // The directory couldn't be opened.  Say so.
-        printf(MSG_CANT_SCAN COLOR_RESET);
+        printf(MSG_CANT_SCAN ANSI_RESET);
     } else if (entry_count == 0) {
         // The directory is empty.  Say so.
-        printf(MSG_EMPTY COLOR_RESET);
+        printf(MSG_EMPTY ANSI_RESET);
     }
 
     // If we can fit on one line, no need to format.
@@ -512,7 +515,7 @@ static void renew_display() {
         // copy the name into the selected name buffer and highlight it.
         if (i == selected) {
             memcpy(selected_name, posix_entries[i]->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
-            printf(COLOR_INVERT);
+            printf(ANSI_INVERT);
         }
 
         // Save cursor position for later use.
@@ -560,12 +563,12 @@ static void refresh_display() {
         if (entry_count >= 1) {
             memcpy(selected_name, posix_entries[selected]->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
 
-            printf("\e[%d;%df" COLOR_RESET,
+            printf("\e[%d;%df" ANSI_RESET,
                    entry_data[selected_previously].row + pos_status_bar.row,
                    entry_data[selected_previously].col);
             write_entry(selected_previously);
 
-            printf("\e[%d;%df" COLOR_INVERT,
+            printf("\e[%d;%df" ANSI_INVERT,
                    entry_data[selected].row + pos_status_bar.row,
                    entry_data[selected].col);
             write_entry(selected);
@@ -575,13 +578,13 @@ static void refresh_display() {
     // Update status bar.
 
     printf("\e[%d;%df\e[0K", pos_status_bar.row, pos_status_bar.col);
-    printf(COLOR_BOLD "%s" COLOR_RESET, selected_name);
+    printf(ANSI_BOLD "%s" ANSI_RESET, selected_name);
 
     switch (prompt) {
     case PROMPT_ERR:
         printf("\e[31m"); // Foreground color red.
     case PROMPT_MSG:
-        printf(ENTRY_DELIM "%s" COLOR_RESET, prompt_buffer);
+        printf(ENTRY_DELIM "%s" ANSI_RESET, prompt_buffer);
         prompt = PROMPT_NONE;
         break;
     case PROMPT_FOR:
@@ -622,7 +625,7 @@ static void open_selection(char * opener) {
     }
 
     // Make sure our terminal attributes are still active.
-    printf("\e[?25l"); // Hide cursor.
+    printf(ANSI_HIDE_CURSOR);
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
 }
 
@@ -749,7 +752,7 @@ int main(int argc, char ** argv) {
     tcattr_raw.c_cc[VTIME] = 0;
     tcattr_raw.c_lflag &= ~(ECHO | ICANON);
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
-    printf("\e[?25l"); // Hide cursor.
+    printf(ANSI_HIDE_CURSOR);
 
 display_then_wait:
     refresh_display();
