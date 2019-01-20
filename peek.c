@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -136,10 +137,11 @@ static char formatted     = 1; // If set, output will do column formatting.
 static int  max_column    = 0; // Number of format columns printed by last display.
 static int  newline_count = 0; // Number of lines printed by last display.
 
+#define SELECTED_NOT -1
 #define SELECTED_MIN 0
 #define SELECTED_MAX (entry_count - 1)
-static int selected = SELECTED_MIN;
-static int selected_previously;
+static int selected            = SELECTED_MIN;
+static int selected_previously = SELECTED_NOT;
 // TODO: This size should not be assumed anymore.
 #define SELECTED_MAXLEN 256
 static char selected_name[SELECTED_MAXLEN];
@@ -327,7 +329,8 @@ static char cd(char * to) {
     free_posix_entries();
     run_scan();
 
-    selected = SELECTED_MIN;
+    selected            = SELECTED_MIN;
+    selected_previously = SELECTED_NOT;
 
     return 1;
 }
@@ -376,6 +379,8 @@ static void validate_selection_index() {
     if (entry_count < 1) selected = 0;
     else if (selected < SELECTED_MIN) selected = SELECTED_MIN;
     else if (selected > SELECTED_MAX) selected = SELECTED_MAX;
+
+    if (selected_previously > SELECTED_MAX) selected_previously = SELECTED_NOT;
 }
 
 static int write_entry(int index) {
@@ -547,10 +552,12 @@ static void refresh_display() {
         if (entry_count >= 1) {
             memcpy(selected_name, posix_entries[selected]->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
 
-            printf("\e[%d;%df" ANSI_RESET,
-                   entry_data[selected_previously].row + pos_status_bar.row,
-                   entry_data[selected_previously].col);
-            write_entry(selected_previously);
+            if (selected_previously > SELECTED_NOT) {
+                printf("\e[%d;%df" ANSI_RESET,
+                        entry_data[selected_previously].row + pos_status_bar.row,
+                        entry_data[selected_previously].col);
+                write_entry(selected_previously);
+            }
 
             printf("\e[%d;%df" ANSI_INVERT,
                    entry_data[selected].row + pos_status_bar.row,
