@@ -120,7 +120,7 @@ enum prompt_t {
 } prompt = PROMPT_NONE;
 
 static char * current_dir     = NULL;
-static int    current_dir_len = 0;
+static size_t current_dir_len = 0;
 
 static struct dirent ** posix_entries = NULL;
 static peek_entry *     entry_data    = NULL;
@@ -140,6 +140,7 @@ static int  newline_count = 0; // Number of lines printed by last display.
 #define SELECTED_MAX (entry_count - 1)
 static int selected = SELECTED_MIN;
 static int selected_previously;
+// TODO: This size should not be assumed anymore.
 #define SELECTED_MAXLEN 256
 static char selected_name[SELECTED_MAXLEN];
 
@@ -309,17 +310,9 @@ static void free_posix_entries() {
 
 // TODO: Replace realpath.  We shouldn't be resolving symlinks.
 static char cd(char * to) {
-    char * old_path = NULL;
-    int old_len = current_dir_len;
-
-    if (current_dir) {
-        // Only provide fallback if this is not the initial path.
-        old_path = malloc(sizeof(*old_path) * old_len);
-        memcpy(old_path, current_dir, sizeof(*old_path) * old_len);
-    }
-
     if (current_dir == NULL) {
-        current_dir = malloc(sizeof(*current_dir) * current_dir_len);
+        // realpath only writes up to PATH_MAX bytes.
+        current_dir = malloc(sizeof(*current_dir) * PATH_MAX);
         realpath(to, current_dir);
     } else if (to[0] == '/') {
         realpath(to, current_dir);
@@ -334,17 +327,8 @@ static char cd(char * to) {
     free_posix_entries();
     run_scan();
 
-    if (entry_count == -1) {
-        // This "directory" (could be a file or something) failed to scan.
-        // Restore old file path.
-        free(current_dir);
-        current_dir     = old_path;
-        current_dir_len = old_len;
-        return 0;
-    }
-    if (old_path) free(old_path);
-
     selected = SELECTED_MIN;
+
     return 1;
 }
 
@@ -737,11 +721,7 @@ int main(int argc, char ** argv) {
     // If there is a remaining argument, it is the directory to start in.
     if (optind < argc) start_dir = argv[optind];
 
-    // Make sure the starting directory is valid.  Fallbacks need it to be.
-    if (!cd(start_dir)) {
-        fprintf(stderr, "%s\n", strerror(errno));
-        return 1;
-    }
+    cd(start_dir);
 
     // Create raw terminal mode to stop stdin buffer from breaking key press detection.
     // http://pubs.opengroup.org/onlinepubs/000095399/basedefs/termios.h.html#tag_13_74_03_06

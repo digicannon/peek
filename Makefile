@@ -2,8 +2,10 @@ SRC = $(wildcard *.c)
 OBJ = $(SRC:.c=.o)
 EXEC ?= pk
 
+CFLAGS ?= -Wall -g
+
 $(EXEC): $(OBJ)
-	$(CC) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $^
 
 .PHONY: install clean
 
