@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <locale.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -196,22 +197,32 @@ static int utf8_len(unsigned char * str) {
     return len;
 }
 
-// If to, the current directory string being appended, is NULL,
-// exact space is allocated and current_dir is copied.
-// Returns to, whether that be the original or a result of the above condition.
-// NOTE: If not NULL, to must be a copy of to.
-static char * append_to_cd(char * to, char * suffix) {
-    size_t suffix_len = strlen(suffix);
-    size_t to_len = current_dir_len + suffix_len + 2;
+// getcwd, but without an existing buffer.
+// The buffer will resize until it can fit
+// the current working directory, even if
+// it is larger than PATH_MAX.
+static char * sturdy_getcwd() {
+    size_t size  = PATH_MAX;
+    char * path  = NULL;
+    char * valid = NULL;
 
-    if (to == NULL) to = malloc(sizeof(*current_dir) * to_len);
+    for (; !valid; size += PATH_MAX) {
+        path  = realloc(path, size);
+        valid = getcwd(path, size);
 
-    memcpy(to, current_dir, sizeof(*current_dir) * current_dir_len);
-    to[current_dir_len] = '/';
-    memcpy(to + current_dir_len + 1, suffix, sizeof(*current_dir) * suffix_len);
-    to[current_dir_len + 1 + suffix_len] = 0;
+        if (!valid && errno != ERANGE) {
+            return NULL;
+        }
+    }
 
-    return to;
+    return path;
+}
+
+static bool sturdy_chdir(char * path) {
+    // TODO: If path is longer than PATH_MAX, this will fail.
+    // If it does, break it up until it works.
+
+    return chdir(path) == 0;
 }
 
 static void get_entry_type(struct dirent * ent, const char ** color, char * indicator) {
@@ -238,15 +249,13 @@ static void get_entry_type(struct dirent * ent, const char ** color, char * indi
         *indicator = indicators[ent->d_type];
     } else {
         // d_type couldn't tell us anything, so check if executable.
-        char * ent_path = append_to_cd(NULL, ent->d_name);
-        if (access(ent_path, X_OK) == 0) {
+        if (access(ent->d_name, X_OK) == 0) {
             *color     = "\e[32;1m";
             *indicator = '*';
         } else {
             *color     = 0;
             *indicator = 0;
         }
-        free(ent_path);
     }
 }
 
@@ -310,18 +319,15 @@ static void free_posix_entries() {
     }
 }
 
-// TODO: Replace realpath.  We shouldn't be resolving symlinks.
-static char cd(char * to) {
-    if (current_dir == NULL) {
-        // realpath only writes up to PATH_MAX bytes.
-        current_dir = malloc(sizeof(*current_dir) * PATH_MAX);
-        realpath(to, current_dir);
-    } else if (to[0] == '/') {
-        realpath(to, current_dir);
-    } else {
-        char * new = append_to_cd(NULL, to);
-        realpath(new, current_dir);
-        free(new);
+static void cd(char * to) {
+    if (!sturdy_chdir(to)) {
+        sprintf(prompt_buffer, "%s", strerror(errno));
+        return;
+    }
+
+    if ((current_dir = sturdy_getcwd()) == NULL) {
+        // TODO: This is fatal.  Do something to communicate.
+        exit(1);
     }
 
     current_dir_len = strlen(current_dir);
@@ -331,8 +337,6 @@ static char cd(char * to) {
 
     selected            = SELECTED_MIN;
     selected_previously = SELECTED_NOT;
-
-    return 1;
 }
 
 static int get_stdin_chars_ahead() {
@@ -591,18 +595,16 @@ static void refresh_display() {
 
 static void open_selection(char * opener) {
     char * argv[3] = {0};
-    char * selected_path;
+    char * path    = selected_name;
     pid_t pid;
-
-    selected_path = append_to_cd(NULL, selected_name);
 
     // If opener is null, then we are executing the selection, not "opening" it.
     if (opener == NULL) {
-        opener  = selected_path;
-        argv[0] = selected_path;
+        opener  = path;
+        argv[0] = path;
     } else {
         argv[0] = opener;
-        argv[1] = selected_path;
+        argv[1] = path;
     }
 
     pid = fork();
