@@ -325,6 +325,8 @@ static void cd(char * to) {
         return;
     }
 
+    if (current_dir) free(current_dir);
+
     if ((current_dir = sturdy_getcwd()) == NULL) {
         // TODO: This is fatal.  Do something to communicate.
         exit(1);
