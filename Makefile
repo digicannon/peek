@@ -2,15 +2,19 @@ SRC = $(wildcard *.c)
 OBJ = $(SRC:.c=.o)
 EXEC ?= pk
 
-CFLAGS ?= -Wall -g
+CFLAGS ?= -Wall -DDEBUG=1 -g
+CFLAGS_RELEASE ?= -Wall -DDEBUG=0
 
 $(EXEC): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $^
 
-.PHONY: install clean
-
-install: $(EXEC)
-	sudo cp $(EXEC) /usr/local/bin/
+.PHONY: clean release install
 
 clean:
-	rm -f $(OBJ) $(EXEC)
+	rm -rf $(OBJ) $(EXEC) release
+
+release: clean
+	$(MAKE) $(EXEC) CFLAGS="$(CFLAGS_RELEASE)"
+
+install: release
+	sudo cp $(EXEC) /usr/local/bin/

@@ -22,6 +22,10 @@
 #endif
 #endif
 
+#if (DEBUG == 0)
+#warning Building release build!
+#endif
+
 #define ANSI_RESET  "\e[m"
 #define ANSI_BOLD   "\e[1m"
 #define ANSI_INVERT "\e[7m"
