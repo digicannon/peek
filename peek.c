@@ -128,15 +128,20 @@ static struct dirent ** posix_entries = NULL;
 static peek_entry *     entry_data    = NULL;
 static int              entry_count   = 0; // Number of entries in current dir.
 
-static char    display_is_dirty = 1; // Force display redraw when true.
-static termpos pos_status_bar;       // Column is the start of the selection name.
+static bool    display_is_dirty = true; // Force display redraw when true.
+static termpos pos_status_bar;          // Column is the start of the selection name.
 static int     entry_row_offset = 0;
 
-static int  avg_columns   = 0; // Average output length of entries.
-static int  total_length  = 0; // Length of output without newlines.
-static char formatted     = 1; // If set, output will do column formatting.
-static int  max_column    = 0; // Number of format columns printed by last display.
-static int  newline_count = 0; // Number of lines printed by last display.
+static bool formatted;     // If true, output will do column formatting.
+static int  avg_columns;   // Average output length of entries.
+static int  total_length;  // Length of output without newlines.
+static int  max_column;    // Number of format columns printed by last display.
+static int  newline_count; // Number of lines printed by last display.
+static int  entry_lines;   // Number of lines taken by entries, printed or not.
+
+// Used for limiting display to a portion of the listing.
+static int i_offset;
+static int i_limit;
 
 #define SELECTED_NOT -1
 #define SELECTED_MIN 0
@@ -154,13 +159,13 @@ static struct termios tcattr_old;
 static struct termios tcattr_raw;
 static struct winsize termsize;
 
-static char cfg_show_dotfiles = 0; //  (-a) If set, files starting with . will be shown.
-static char cfg_color         = 1; // !(-B) If set, color output.
-static char cfg_clear_trace   = 0; //  (-c) If set, clear displayed text on exit.
-static char cfg_show_dir      = 1; // !(-d) If set, print current dir before listing.
-static char cfg_indicate      = 0; //  (-F) If set, append indicators to entries.
-static char cfg_format_hori   = 0; //  (-H) If set, format horizontally.
-static char cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
+static bool cfg_show_dotfiles = 0; //  (-a) If set, files starting with . will be shown.
+static bool cfg_color         = 1; // !(-B) If set, color output.
+static bool cfg_clear_trace   = 0; //  (-c) If set, clear displayed text on exit.
+static bool cfg_show_dir      = 1; // !(-d) If set, print current dir before listing.
+static bool cfg_indicate      = 0; //  (-F) If set, append indicators to entries.
+static bool cfg_format_hori   = 0; //  (-H) If set, format horizontally.
+static bool cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
 
 static void restore_tcattr() {
     printf(ANSI_SHOW_CURSOR);
@@ -265,7 +270,7 @@ static void run_scan() {
     int len = 0;
 
     // The next refresh needs to know that the data on screen is no longer valid.
-    display_is_dirty = 1;
+    display_is_dirty = true;
 
     entry_count = scandir(current_dir, &posix_entries, display_filter, alphasort);
     if (entry_count <= 0) {
@@ -282,6 +287,7 @@ static void run_scan() {
     formatted    = 1;
 
     // Calculate average display length and total length of output.
+
     for (int i = 0; i < entry_count; ++i) {
         entry_data[i].len = utf8_len((unsigned char *)posix_entries[i]->d_name);
         len = entry_data[i].len;
@@ -303,6 +309,7 @@ static void run_scan() {
         if (entry_data[i].indicator) ++total_length;
         total_length += ENTRY_DELIM_LEN;
     }
+
     if (entry_count) avg_columns /= entry_count;
 
     // Don't force columns to be bigger than the longest entry.
@@ -380,13 +387,18 @@ scan_for_esc:
 }
 
 // Make sure the selection isn't out of bounds.
-// Used in renew_display and refresh_display.
 static void validate_selection_index() {
     if (entry_count < 1) selected = 0;
     else if (selected < SELECTED_MIN) selected = SELECTED_MIN;
     else if (selected > SELECTED_MAX) selected = SELECTED_MAX;
 
     if (selected_previously > SELECTED_MAX) selected_previously = SELECTED_NOT;
+
+    // For partial displays, a renew must occur when the cursor
+    // passes the portion we are already displaying.
+    if (selected < i_offset || selected > i_limit) {
+        display_is_dirty = true;
+    }
 }
 
 static int write_entry(int index) {
@@ -451,8 +463,6 @@ static void renew_display() {
 
     if (posix_entries == NULL) run_scan();
 
-    validate_selection_index();
-
     // Return to start of last display and erase previous.
     // 0J erases below cursor, 2K erases to the right.
 
@@ -495,8 +505,18 @@ static void renew_display() {
     max_column = avg_columns + ENTRY_DELIM_LEN;
     if (cfg_indicate) ++max_column;
     max_column = termsize.ws_col / max_column;
+    
+    // If formatted, make sure we can fit all the rows.
+    if (formatted && (entry_count / max_column > termsize.ws_row)) {
+        int page_length = (termsize.ws_row - entry_row_offset) * max_column;
+        i_offset = selected / page_length * page_length;
+        i_limit  = i_offset + page_length - 1;
+    } else {
+        i_offset = SELECTED_MIN;
+        i_limit  = SELECTED_MAX;
+    }
 
-    for (int i = 0; i < entry_count; ++i) {
+    for (int i = i_offset; i <= i_limit && i < entry_count; ++i) {
         if (formatted) {
             // If this entry would line wrap, print a newline.
             if (++next_column > max_column) {
@@ -516,8 +536,8 @@ static void renew_display() {
         // Save cursor position for later use.
 
         if (formatted) {
-            entry_data[i].row = i / max_column + entry_row_offset;
-            entry_data[i].col = i % max_column * (avg_columns + ENTRY_DELIM_LEN) + 1;
+            entry_data[i].row = (i - i_offset) / max_column + entry_row_offset;
+            entry_data[i].col = (i - i_offset) % max_column * (avg_columns + ENTRY_DELIM_LEN) + 1;
             write_entry(i);
         } else {
             entry_data[i].row = entry_row_offset;
@@ -533,12 +553,17 @@ static void renew_display() {
         get_cursor_pos(&row_after, NULL);
         pos_status_bar.row = row_after - newline_count;
     }
+
+    // Save number of lines taken by entries.  Possibly different from newline_count.
+    entry_lines = entry_count / max_column * max_column;
 }
 
 static void refresh_display() {
     struct winsize new_termsize;
 
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &new_termsize);
+
+    validate_selection_index();
 
     if (display_is_dirty
         || new_termsize.ws_row != termsize.ws_row
@@ -549,11 +574,9 @@ static void refresh_display() {
 
         termsize = new_termsize;
         renew_display();
-        display_is_dirty = 0;
+        display_is_dirty = false;
     } else {
         // Reflect changes in entry selection.
-
-        validate_selection_index();
 
         if (entry_count >= 1) {
             memcpy(selected_name, posix_entries[selected]->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
@@ -635,7 +658,7 @@ static void handle_user_act(user_action act) {
         if (selected - max_column < SELECTED_MIN) {
             // There is no entry above, so
             // move to the last row in the column.
-            int offset = max_column * (newline_count - 1);
+            int offset = max_column * (entry_lines - 1);
             if (selected + offset > SELECTED_MAX) offset -= max_column;
             selected += offset;
         } else {
@@ -647,7 +670,7 @@ static void handle_user_act(user_action act) {
         if (selected + max_column > SELECTED_MAX) {
             // There is no entry below, so
             // move to the first row in the column.
-            int offset = max_column * (newline_count - 1);
+            int offset = max_column * (entry_lines - 1);
             if (selected - offset < SELECTED_MIN) offset -= max_column;
             selected -= offset;
         } else {
