@@ -11,7 +11,7 @@ $(EXEC): $(OBJ)
 .PHONY: clean release install
 
 clean:
-	rm -rf $(OBJ) $(EXEC) release
+	rm -f $(OBJ) $(EXEC)
 
 release: clean
 	$(MAKE) $(EXEC) CFLAGS="$(CFLAGS_RELEASE)"
