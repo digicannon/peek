@@ -33,7 +33,7 @@
 #define ANSI_SHOW_CURSOR "\e[?25h"
 #define ANSI_HIDE_CURSOR "\e[?25l"
 
-#define SHORT_FLAGS "aBcdFhx"
+#define SHORT_FLAGS "aBcdFhox"
 #define MSG_USAGE   "Usage: %s [-" SHORT_FLAGS "] [<directory>]"
 #define MSG_INVALID MSG_USAGE "\nTry '%s -h' for more information.\n"
 #define MSG_HELP MSG_USAGE "\nInteractive exploration of directories on the command line.\n"              \
@@ -44,6 +44,7 @@
                            "  -d\tPrint current directory path before listing.\n"                         \
                            "  -F\tAppend ls style indicators to the end of entries.\n"                    \
                            "  -h\tPrint this message and exit.\n"                                         \
+                           "  -o\tPrint listing and exit.  (aka LS mode.)\n"                              \
                            "  -x\tPrint unprintable characters as hex.  Carriage return would be \\0D.\n" \
                            "\nKeys:\n"                                                                    \
                            "   F10|Q \tQuit.\n"                                                           \
@@ -169,6 +170,7 @@ static bool cfg_clear_trace   = 0; //  (-c) If set, clear displayed text on exit
 static bool cfg_show_dir      = 1; // !(-d) If set, print current dir before listing.
 static bool cfg_indicate      = 0; //  (-F) If set, append indicators to entries.
 static bool cfg_format_hori   = 0; //  (-H) If set, format horizontally.
+static bool cfg_oneshot       = 0; //  (-o) If set, print listing and exit.  (aka LS mode.)
 static bool cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
 
 static void restore_tcattr() {
@@ -474,14 +476,16 @@ static void renew_display() {
 
     // If enabled, print current directory name.
 
-    if (cfg_show_dir) {
-        printf(ANSI_INVERT ANSI_BOLD "%s", current_dir);
-        if (current_dir[0] != 0 && current_dir[1] != 0) putchar('/');
-    }
+    if (!cfg_oneshot) {
+        if (cfg_show_dir) {
+            printf(ANSI_INVERT ANSI_BOLD "%s", current_dir);
+            if (current_dir[0] != 0 && current_dir[1] != 0) putchar('/');
+        }
 
-    get_cursor_pos(&pos_status_bar.row, &pos_status_bar.col);
-    printf(ANSI_RESET "\n");
-    ++newline_count;
+        get_cursor_pos(&pos_status_bar.row, &pos_status_bar.col);
+        printf(ANSI_RESET "\n");
+        ++newline_count;
+    }
 
 #if DEBUG
     printf("Dev Build %s %s\n", __DATE__, __TIME__);
@@ -511,7 +515,7 @@ static void renew_display() {
     max_column = termsize.ws_col / max_column;
     
     // If formatted, make sure we can fit all the rows.
-    if (formatted && (entry_count / max_column > termsize.ws_row)) {
+    if (!cfg_oneshot && formatted && (entry_count / max_column > termsize.ws_row)) {
         int page_length = (termsize.ws_row - entry_row_offset) * max_column;
         i_offset = selected / page_length * page_length;
         i_limit  = i_offset + page_length - 1;
@@ -532,7 +536,7 @@ static void renew_display() {
 
         // If this is the currently selected entry,
         // copy the name into the selected name buffer and highlight it.
-        if (i == selected) {
+        if (!cfg_oneshot && i == selected) {
             memcpy(selected_name, posix_entries[i]->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
             printf(ANSI_INVERT);
         }
@@ -600,6 +604,9 @@ static void refresh_display() {
     }
 
     // Update status bar.
+
+    // But not if we're a oneshot.
+    if (cfg_oneshot) return;
 
     printf("\e[%d;%df\e[0K", pos_status_bar.row, pos_status_bar.col);
     printf(ANSI_BOLD "%s" ANSI_RESET, selected_name);
@@ -750,6 +757,7 @@ int main(int argc, char ** argv) {
     case 'c': cfg_clear_trace   = 1; break;
     case 'd': cfg_show_dir      = 0; break;
     case 'F': cfg_indicate      = 1; break;
+    case 'o': cfg_oneshot       = 1; break;
     case 'x': cfg_print_hex     = 1; break;
     case 'h': printf(MSG_HELP, argv[0]); return 0;
     case '?': fprintf(stderr, MSG_INVALID, argv[0], argv[0]); return 1;
@@ -774,6 +782,8 @@ int main(int argc, char ** argv) {
 
 display_then_wait:
     refresh_display();
+
+    if (cfg_oneshot) goto quit;
 
 wait_for_user_act:
     switch (getchar()) {
