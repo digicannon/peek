@@ -74,6 +74,11 @@
 // A character is printable if above the controls and not DEL.
 #define UTF8_PRINTABLE(c) (c > 0x1F && c != 0x7F)
 
+// Name of environment variable to set when executing a process.
+#define EXEC_ENV_NAME  "PEEK_CHILD"
+// Value of environment variable to set when executing a process.
+#define EXEC_ENV_VALUE "1"
+
 // The program to open files.  OS dependant.
 #ifndef EXEC_NAME_OPENER
     #if defined(__CYGWIN__)
@@ -173,7 +178,11 @@ static bool cfg_print_hex     = 0; //  (-x) If set, print unprintable characters
 
 static void restore_tcattr() {
     printf(ANSI_SHOW_CURSOR);
+    fflush(stdout);
+    tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
+}
 
+static void restore_tcattr_and_clean() {
     if (cfg_oneshot) {
         // The cursor is never moved in oneshot mode,
         // so just print a newline to finish output.
@@ -188,7 +197,28 @@ static void restore_tcattr() {
         }
     }
 
-    tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
+    restore_tcattr();
+}
+
+// Create raw terminal mode to stop stdin buffer from breaking key press detection.
+// http://pubs.opengroup.org/onlinepubs/000095399/basedefs/termios.h.html#tag_13_74_03_06
+static void replace_tcattr() {
+    static bool first_time = true;
+
+    if (first_time) {
+        atexit(restore_tcattr_and_clean); // Restore old mode when we're done.
+
+        tcgetattr(STDIN_FILENO, &tcattr_old);
+        memcpy(&tcattr_raw, &tcattr_old, sizeof(struct termios));
+        tcattr_raw.c_cc[VMIN]  = 1;
+        tcattr_raw.c_cc[VTIME] = 0;
+        tcattr_raw.c_lflag &= ~(ECHO | ICANON);
+
+        first_time = false;
+    }
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
+    printf(ANSI_HIDE_CURSOR);
 }
 
 static int display_filter(const struct dirent * ent) {
@@ -339,6 +369,7 @@ static void free_posix_entries() {
         for (int i = 0; i < entry_count; ++i) free(posix_entries[i]);
         free(posix_entries);
         posix_entries = NULL;
+        display_is_dirty = true;
     }
 }
 
@@ -651,19 +682,20 @@ static void open_selection(char * opener) {
         argv[1] = path;
     }
 
+    restore_tcattr();
+
     pid = fork();
 
     if (pid > 0) {
         wait(NULL);
     } else if (pid == 0) {
+        putenv(EXEC_ENV_NAME "=" EXEC_ENV_VALUE);
         execvp(opener, argv);
         // If we got here, execvp failed.
         exit(1);
     }
 
-    // Make sure our terminal attributes are still active.
-    printf(ANSI_HIDE_CURSOR);
-    tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
+    replace_tcattr();
 }
 
 static void handle_user_act(user_action act) {
@@ -746,6 +778,7 @@ static void handle_user_act(user_action act) {
         break;
     case USER_ACT_ON_EXEC:
         open_selection(NULL);
+        display_is_dirty = true;
         break;
     case USER_ACT_ON_OPEN:
         open_selection(EXEC_NAME_OPENER);
@@ -776,16 +809,8 @@ int main(int argc, char ** argv) {
 
     cd(start_dir);
 
-    // Create raw terminal mode to stop stdin buffer from breaking key press detection.
-    // http://pubs.opengroup.org/onlinepubs/000095399/basedefs/termios.h.html#tag_13_74_03_06
-    tcgetattr(STDIN_FILENO, &tcattr_old);
-    atexit(restore_tcattr); // Restore old mode when we're done.
-    memcpy(&tcattr_raw, &tcattr_old, sizeof(struct termios));
-    tcattr_raw.c_cc[VMIN]  = 1;
-    tcattr_raw.c_cc[VTIME] = 0;
-    tcattr_raw.c_lflag &= ~(ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
-    printf(ANSI_HIDE_CURSOR);
+    // Configure terminal to our needs.
+    replace_tcattr();
 
 display_then_wait:
     refresh_display();
