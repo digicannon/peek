@@ -33,18 +33,17 @@
 #define ANSI_SHOW_CURSOR "\e[?25h"
 #define ANSI_HIDE_CURSOR "\e[?25l"
 
-#define SHORT_FLAGS "aBcdFhox"
+#define SHORT_FLAGS "aBcFhox"
 #define MSG_USAGE   "Usage: %s [-" SHORT_FLAGS "] [<directory>]"
 #define MSG_INVALID MSG_USAGE "\nTry '%s -h' for more information.\n"
 #define MSG_HELP MSG_USAGE "\nInteractive exploration of directories on the command line.\n"              \
                            "\nFlags:\n"                                                                   \
                            "  -a\tShow files starting with . (hidden by default).\n"                      \
                            "  -B\tDon't output color.\n"                                                  \
-                           "  -c\tClear listing on exit.\n"                                               \
-                           "  -d\tPrint current directory path before listing.\n"                         \
+                           "  -c\tClear listing on exit.  Ignored with -o.\n"                             \
                            "  -F\tAppend ls style indicators to the end of entries.\n"                    \
                            "  -h\tPrint this message and exit.\n"                                         \
-                           "  -o\tPrint listing and exit.  (aka LS mode.)\n"                              \
+                           "  -o\tPrint listing and exit.  AKA LS mode.\n"                                \
                            "  -x\tPrint unprintable characters as hex.  Carriage return would be \\0D.\n" \
                            "\nKeys:\n"                                                                    \
                            "   F10|Q \tQuit.\n"                                                           \
@@ -167,16 +166,27 @@ static struct winsize termsize;
 static bool cfg_show_dotfiles = 0; //  (-a) If set, files starting with . will be shown.
 static bool cfg_color         = 1; // !(-B) If set, color output.
 static bool cfg_clear_trace   = 0; //  (-c) If set, clear displayed text on exit.
-static bool cfg_show_dir      = 1; // !(-d) If set, print current dir before listing.
 static bool cfg_indicate      = 0; //  (-F) If set, append indicators to entries.
 static bool cfg_format_hori   = 0; //  (-H) If set, format horizontally.
-static bool cfg_oneshot       = 0; //  (-o) If set, print listing and exit.  (aka LS mode.)
+static bool cfg_oneshot       = 0; //  (-o) If set, print listing and exit.  (AKA LS mode.)
 static bool cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
 
 static void restore_tcattr() {
     printf(ANSI_SHOW_CURSOR);
-    if (cfg_clear_trace) printf("\e[0J\e[2K"); // Clear ahead and below.
-    else for (int l = 0; l <= newline_count; ++l) putchar('\n');
+
+    if (cfg_oneshot) {
+        // The cursor is never moved in oneshot mode,
+        // so just print a newline to finish output.
+        putchar('\n');
+    } else {
+        if (cfg_clear_trace) {
+            // Clear everything beyond the cursor.
+            printf("\e[0J\e[2K");
+        } else {
+            // Move down a line for every line printed.
+            for (int l = 0; l <= newline_count; ++l) putchar('\n');
+        }
+    }
 
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
 }
@@ -477,10 +487,8 @@ static void renew_display() {
     // If enabled, print current directory name.
 
     if (!cfg_oneshot) {
-        if (cfg_show_dir) {
-            printf(ANSI_INVERT ANSI_BOLD "%s", current_dir);
-            if (current_dir[0] != 0 && current_dir[1] != 0) putchar('/');
-        }
+        printf(ANSI_INVERT ANSI_BOLD "%s", current_dir);
+        if (current_dir[0] != 0 && current_dir[1] != 0) putchar('/');
 
         get_cursor_pos(&pos_status_bar.row, &pos_status_bar.col);
         printf(ANSI_RESET "\n");
@@ -755,7 +763,6 @@ int main(int argc, char ** argv) {
     case 'a': cfg_show_dotfiles = 1; break;
     case 'B': cfg_color         = 0; break;
     case 'c': cfg_clear_trace   = 1; break;
-    case 'd': cfg_show_dir      = 0; break;
     case 'F': cfg_indicate      = 1; break;
     case 'o': cfg_oneshot       = 1; break;
     case 'x': cfg_print_hex     = 1; break;
