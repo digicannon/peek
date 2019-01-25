@@ -97,6 +97,14 @@
     #define EXEC_NAME_EDITOR "vim"
 #endif
 
+// TEMP: This should be /bin/sh by default.
+// /bin/sh is required by POSIX to exist.
+// However, it is rarely the default interactive shell,
+// so this must be customizable.
+#ifndef SHELL_PATH
+    #define SHELL_PATH "/bin/bash"
+#endif
+
 typedef enum user_action {
     USER_ACT_MV_UP,
     USER_ACT_MV_DOWN,
@@ -108,6 +116,7 @@ typedef enum user_action {
     USER_ACT_ON_EDIT,
     USER_ACT_ON_EXEC,
     USER_ACT_ON_OPEN,
+    USER_ACT_SHELL,
 } user_action;
 
 typedef struct termpos {
@@ -668,19 +677,10 @@ static void refresh_display() {
     printf("\e[%d;%df", pos_status_bar.row, 0);
 }
 
-static void open_selection(char * opener) {
-    char * argv[3] = {0};
-    char * path    = selected_name;
+// The first string in argv must be exec.
+// The last string in argv must be NULL.
+static void fork_exec(char * exec, char ** argv) {
     pid_t pid;
-
-    // If opener is null, then we are executing the selection, not "opening" it.
-    if (opener == NULL) {
-        opener  = path;
-        argv[0] = path;
-    } else {
-        argv[0] = opener;
-        argv[1] = path;
-    }
 
     // Setup normal terminal environment and clear beyond the cursor.
     restore_tcattr();
@@ -693,12 +693,23 @@ static void open_selection(char * opener) {
         wait(NULL);
     } else if (pid == 0) {
         putenv(EXEC_ENV_NAME "=" EXEC_ENV_VALUE);
-        execvp(opener, argv);
+        execvp(exec, argv);
         // If we got here, execvp failed.
         exit(1);
     }
 
     replace_tcattr();
+    display_is_dirty = true;
+}
+
+static void fork_exec_no_argv(char * exec) {
+    char * argv[2] = {exec, NULL};
+    fork_exec(exec, argv);
+}
+
+static void open_selection(char * opener) {
+    char * argv[3] = {opener, selected_name, NULL};
+    fork_exec(opener, argv);
 }
 
 static void handle_user_act(user_action act) {
@@ -780,11 +791,14 @@ static void handle_user_act(user_action act) {
         open_selection(EXEC_NAME_EDITOR);
         break;
     case USER_ACT_ON_EXEC:
-        open_selection(NULL);
+        fork_exec_no_argv(selected_name);
         display_is_dirty = true;
         break;
     case USER_ACT_ON_OPEN:
         open_selection(EXEC_NAME_OPENER);
+        break;
+    case USER_ACT_SHELL:
+        fork_exec_no_argv(SHELL_PATH);
         break;
     }
 }
@@ -819,6 +833,9 @@ display_then_wait:
     refresh_display();
 
     if (cfg_oneshot) goto quit;
+
+    // TODO: Most of the letter keybinds should be function keys.
+    // Not all keyboards have these letters!
 
 wait_for_user_act:
     switch (getchar()) {
@@ -876,6 +893,9 @@ wait_for_user_act:
         goto quit;
     case 'R': case 'r':
         handle_user_act(USER_ACT_CD_RELOAD);
+        break;
+    case 'S': case 's':
+        handle_user_act(USER_ACT_SHELL);
         break;
     case 'X': case 'x':
         handle_user_act(USER_ACT_ON_EXEC);
