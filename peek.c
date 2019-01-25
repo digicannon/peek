@@ -682,7 +682,10 @@ static void open_selection(char * opener) {
         argv[1] = path;
     }
 
+    // Setup normal terminal environment and clear beyond the cursor.
     restore_tcattr();
+    printf("\e[0J\e[2K");
+    fflush(stdout);
 
     pid = fork();
 
