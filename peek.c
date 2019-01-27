@@ -56,6 +56,7 @@
                            "   E\tEdit selected entry.\n"                                                 \
                            "   O\tOpen selected entry.\n"                                                 \
                            "   R\tRefresh directory listing.\n"                                           \
+                           "   S\tOpen shell.\n"                                                          \
                            "   X\tExecute selected entry.\n"
 #define MSG_CANT_SCAN "could not scan"
 #define MSG_EMPTY     "empty"
