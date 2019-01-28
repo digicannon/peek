@@ -384,9 +384,12 @@ static void run_scan() {
 
     if (entry_count) avg_columns /= entry_count;
 
-    // Don't force columns to be bigger than the longest entry.
-    if (avg_columns < MIN_ENTRY_LEN) {
-        avg_columns = longest_entry_len < 13 ? longest_entry_len : 13;
+    if (cfg_oneshot) {
+        // Don't shorten names in oneshot mode.
+        avg_columns = longest_entry_len;
+    } else if (avg_columns < MIN_ENTRY_LEN) {
+        // Don't force columns to be bigger than the longest entry.
+        avg_columns = longest_entry_len < MIN_ENTRY_LEN ? longest_entry_len : MIN_ENTRY_LEN;
     }
 }
 
