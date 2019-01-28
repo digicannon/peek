@@ -78,7 +78,7 @@
 #define MSG_EMPTY     "empty"
 
 // 8.3 was FAT's max filename.  That sounds like a good minimum.
-#define MIN_ENTRY_LEN   13
+#define MIN_ENTRY_LEN   11
 #define ENTRY_DELIM     "  "
 #define ENTRY_DELIM_LEN 2
 
