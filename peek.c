@@ -628,7 +628,8 @@ static void renew_display() {
     }
 
     // Save number of lines taken by entries.  Possibly different from newline_count.
-    entry_lines = entry_count / max_column * max_column;
+    entry_lines = entry_count / max_column;
+    if (entry_count % max_column > 0) entry_lines += 1;
 }
 
 static void refresh_display() {
