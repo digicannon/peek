@@ -1,6 +1,5 @@
 # Peek
 
----
 ***Note: Peek is a work in progress and currently has no release.***  
 It is considered usable enough for testers, but *please* refrain from sharing with your friends and coworkers until a release.
 ---
