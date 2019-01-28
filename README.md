@@ -15,4 +15,4 @@ Peek gives you interactive exploration of directories on the command line.  It w
 Short answer: *Probably not.*  
 Long answer:  *Definitely not:*  
 Peek aids your current workflow as-is rather than being an interruption.  It quickly displays the info you need and allows you to act upon it.  
-On the other hand, a file manager would fill your screen with information.  It assumes the only thing you want to be doing is managing your files (move, copy, delete), and expects you to use it until there is no more file interactions to be had.
+On the other hand, a file manager would fill your screen with information.  It assumes the only thing you want to do is manage your files (move, copy, delete), and expects you to use it until you are done interacting with your files.
