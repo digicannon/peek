@@ -405,6 +405,7 @@ static void free_posix_entries() {
 static void cd(char * to) {
     if (!sturdy_chdir(to)) {
         sprintf(prompt_buffer, "%s", strerror(errno));
+        prompt = PROMPT_ERR;
         return;
     }
 
@@ -846,6 +847,7 @@ int main(int argc, char ** argv) {
     if (optind < argc) start_dir = argv[optind];
 
     cd(start_dir);
+    if (prompt) goto quit;
 
     // Configure terminal to our needs.
     replace_tcattr();
@@ -926,5 +928,8 @@ wait_for_user_act:
     goto display_then_wait;
 
 quit:
+    if (prompt) {
+        printf("%s\n", prompt_buffer);
+    }
     return 0;
 }
