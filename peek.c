@@ -49,7 +49,14 @@
 #define ANSI_SHOW_CURSOR "\e[?25h"
 #define ANSI_HIDE_CURSOR "\e[?25l"
 
-#define SHORT_FLAGS "aBcFhox"
+#define VERSION "0.1.0"
+#if (DEBUG == 1)
+#define MSG_VERSION "Peek " VERSION "-debug\n"
+#else
+#define MSG_VERSION "Peek " VERSION "\n"
+#endif
+
+#define SHORT_FLAGS "aBcFhoxv"
 #define MSG_USAGE   "Usage: %s [-" SHORT_FLAGS "] [<directory>]"
 #define MSG_INVALID MSG_USAGE "\nTry '%s -h' for more information.\n"
 #define MSG_HELP MSG_USAGE "\nInteractive exploration of directories on the command line.\n"              \
@@ -60,6 +67,7 @@
                            "  -F\tAppend ls style indicators to the end of entries.\n"                    \
                            "  -h\tPrint this message and exit.\n"                                         \
                            "  -o\tPrint listing and exit.  AKA LS mode.\n"                                \
+                           "  -v\tPrint version and exit.\n"                                              \
                            "  -x\tPrint unprintable characters as hex.  Carriage return would be \\0D.\n" \
                            "\nKeys:\n"                                                                    \
                            "   F10|Q \tQuit.\n"                                                           \
@@ -839,6 +847,7 @@ int main(int argc, char ** argv) {
     case 'o': cfg_oneshot       = 1; break;
     case 'x': cfg_print_hex     = 1; break;
     case 'h': printf(MSG_HELP, argv[0]); return 0;
+    case 'v': printf(MSG_VERSION); return 0;
     case '?': fprintf(stderr, MSG_INVALID, argv[0], argv[0]); return 1;
     default: abort();
     }}
