@@ -1,4 +1,6 @@
 # Peek
+Copyright (C) 2019  Noah Greenberg
+Peek is licensed under [GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.en.html).
 
 ***Note: Peek is a work in progress and currently has no release.***  
 It is considered usable enough for testers, but *please* refrain from sharing with your friends and coworkers until a release.
