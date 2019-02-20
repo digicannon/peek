@@ -1,0 +1,12 @@
+#!/bin/sh
+
+if ! make > /dev/null; then exit 1; fi
+
+echo "=== ls -x ==="
+if [ -f /usr/local/bin/gls ]; then
+    gls -x --color=always $@
+else
+    ls -x $@
+fi
+echo "=== pk -o ==="
+./pk -o $@

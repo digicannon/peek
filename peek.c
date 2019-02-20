@@ -101,6 +101,9 @@
 // A character is printable if above the controls and not DEL.
 #define UTF8_PRINTABLE(c) (c > 0x1F && c != 0x7F)
 
+#define HEXPRINT_FORMAT "\\x%02X"
+#define HEXPRINT_LENGTH 4
+
 // Name of environment variable to set when executing a process.
 #define EXEC_ENV_NAME  "PEEK_CHILD"
 // Value of environment variable to set when executing a process.
@@ -178,11 +181,12 @@ static termpos pos_status_bar;          // Column is the start of the selection 
 static int     entry_row_offset = 0;
 
 static bool formatted;     // If true, output will do column formatting.
-static int  avg_columns;   // Average output length of entries.
 static int  total_length;  // Length of output without newlines.
-static int  max_column;    // Number of format columns printed by last display.
-static int  newline_count; // Number of lines printed by last display.
+static int  entry_columns; // Number of entries per line, if formatted.
 static int  entry_lines;   // Number of lines taken by entries, printed or not.
+static int  newline_count; // Number of lines printed by last display.
+
+static int * entry_column_widths; // The longest entry in each column.
 
 // Used for limiting display to a portion of the listing.
 static int i_offset;
@@ -242,6 +246,8 @@ static void replace_tcattr() {
     static bool first_time = true;
 
     if (first_time) {
+        first_time = false;
+
         atexit(restore_tcattr_and_clean); // Restore old mode when we're done.
 
         tcgetattr(STDIN_FILENO, &tcattr_old);
@@ -249,8 +255,6 @@ static void replace_tcattr() {
         tcattr_raw.c_cc[VMIN]  = 1;
         tcattr_raw.c_cc[VTIME] = 0;
         tcattr_raw.c_lflag &= ~(ECHO | ICANON);
-
-        first_time = false;
     }
 
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
@@ -270,8 +274,7 @@ static int utf8_char_len(unsigned char c) {
     if (UTF8_PRINTABLE(c)) {
         if (UTF8_COUNTABLE(c)) return 1;
     } else if (cfg_print_hex) {
-        // 3 = \XX
-        if (UTF8_COUNTABLE(c)) return 3;
+        if (UTF8_COUNTABLE(c)) return HEXPRINT_LENGTH;
     }
     return 0;
 }
@@ -348,7 +351,6 @@ static void get_entry_type(struct dirent * ent, const char ** color, char * indi
 
 static void run_scan() {
     int old_entry_count = entry_count;
-    int longest_entry_len = 0;
     int len = 0;
 
     // The next refresh needs to know that the data on screen is no longer valid.
@@ -364,11 +366,8 @@ static void run_scan() {
         entry_data = realloc(entry_data, sizeof(*entry_data) * entry_count);
     }
 
-    avg_columns  = 0;
-    total_length = 0;
     formatted    = 1;
-
-    // Calculate average display length and total length of output.
+    total_length = 0;
 
     for (int i = 0; i < entry_count; ++i) {
         entry_data[i].len = utf8_len((unsigned char *)posix_entries[i]->d_name);
@@ -378,28 +377,9 @@ static void run_scan() {
         if (!cfg_color)    entry_data[i].color     = 0;
         if (!cfg_indicate) entry_data[i].indicator = 0;
 
-        // Try to prevent abnormally sized entries from skewing average.
-        if (i == 0 || (
-                len < avg_columns / i + MIN_ENTRY_LEN
-                && len >= MIN_ENTRY_LEN)) {
-            avg_columns += len;
-        }
-
-        if (len > longest_entry_len) longest_entry_len = len;
-
         total_length += len;
         if (entry_data[i].indicator) ++total_length;
         total_length += ENTRY_DELIM_LEN;
-    }
-
-    if (entry_count) avg_columns /= entry_count;
-
-    if (cfg_oneshot) {
-        // Don't shorten names in oneshot mode.
-        avg_columns = longest_entry_len;
-    } else if (avg_columns < MIN_ENTRY_LEN) {
-        // Don't force columns to be bigger than the longest entry.
-        avg_columns = longest_entry_len < MIN_ENTRY_LEN ? longest_entry_len : MIN_ENTRY_LEN;
     }
 }
 
@@ -429,7 +409,6 @@ static void cd(char * to) {
     current_dir_len = strlen(current_dir);
 
     free_posix_entries();
-    run_scan();
 
     selected            = SELECTED_MIN;
     selected_previously = SELECTED_NOT;
@@ -488,7 +467,7 @@ static void validate_selection_index() {
     }
 }
 
-static int write_entry(int index) {
+static int write_entry(int index, int width) {
     struct dirent * d_child           = posix_entries[index];
     const char *    d_child_color     = entry_data[index].color;
     char            d_child_indicator = entry_data[index].indicator;
@@ -502,26 +481,16 @@ static int write_entry(int index) {
     // Print the name of the entry.
     for (unsigned char * c = (unsigned char *)d_child->d_name; *c; ++c) {
         char_len = utf8_char_len(*c);
-        used_chars += char_len;
-        
-        if (formatted) {
-            // Stop early for end of column.
-
-            if (used_chars >= (d_child_indicator ? avg_columns - 1 : avg_columns)) {
-                // Replace last character with truncation indictaor.
-                printf(ANSI_RESET "~");
-                if (char_len == 3) used_chars -= 2;
-                break;
-            }
-        }
 
         // This character is printable if
         // it is above control characters and not DEL.
         if (UTF8_PRINTABLE(*c)) {
             putchar(*c);
         } else if (cfg_print_hex) {
-            printf("\\%02X", (unsigned char)*c);
+            printf(HEXPRINT_FORMAT, (unsigned char)*c);
         }
+
+        used_chars += char_len;
     }
 
     printf(ANSI_RESET);
@@ -533,18 +502,55 @@ static int write_entry(int index) {
     }
 
     if (formatted) {
-        for (; used_chars < avg_columns; ++used_chars) putchar(' ');
+        for (; used_chars < width; ++used_chars) putchar(' ');
+    } else {
+        used_chars += printf(ENTRY_DELIM);
     }
-    used_chars += printf(ENTRY_DELIM);
 
     return used_chars;
 }
 
+// If write_widths is set, each column width
+// will be written to entry_column_widths[].
+// It is expected that entry_column_widths
+// has been allocated the appropriate size.
+// In addition, the write will be cut short
+// if cols if found to be an invalid amount.
+static bool valid_column_count(int cols, bool write_widths) {
+    int lines = (entry_count - 1) / cols + 1;
+    int width = 0;
+
+    // Find the longest entry in each line.
+    // Keep adding the longest entry to the width
+    // and we'll have how wide our output would be.
+
+    for (int col = 0; col < cols; ++col) {
+        int longest = 0;
+
+        for (int line = 0; line < lines; ++line) {
+            int i = line * cols + col;
+            int len;
+
+            if (i >= entry_count) break;
+            len = entry_data[i].len;
+            if (entry_data[i].indicator) ++len;
+            if (len > longest) longest = len;
+        }
+
+        if (col < cols - 1) longest += ENTRY_DELIM_LEN;
+        if (write_widths) entry_column_widths[col] = longest;
+        width += longest;
+        if (width > termsize.ws_col) return false;
+    }
+
+    return true;
+}
+
 static void renew_display() {
     // If formatting, this will be the next format column to use.
-    // If not, this will be the amount of characters printed so far.
-    //                          (literally the next terminal column)
     int next_column = 0;
+    // The amount of characters printed in the current line.
+    int used_chars  = 0;
 
     newline_count = 0;
 
@@ -583,19 +589,33 @@ static void renew_display() {
         printf(MSG_EMPTY ANSI_RESET);
     }
 
-    // If we can fit on one line, no need to format.
     if (total_length < termsize.ws_col) {
+        // If we can fit on one line, no need to format.
         formatted = 0;
+    } else {
+        // Determine max number of columns using rightmost binary search.
+
+        int lo = 1;
+        int hi = entry_count - 1;
+
+        while (lo < hi) {
+            int m = lo + (hi - lo) / 2;
+            if (valid_column_count(m, false)) lo = m + 1;
+            else                              hi = m;
+        }
+
+        entry_columns = lo - 1;
+        entry_lines   = (entry_count - 1) / entry_columns + 1;
+
+        entry_column_widths = realloc(entry_column_widths,
+                                      sizeof(*entry_column_widths) * entry_columns);
+
+        valid_column_count(entry_columns, true);
     }
 
-    // Calculate how many columns we have.
-    max_column = avg_columns + ENTRY_DELIM_LEN;
-    if (cfg_indicate) ++max_column;
-    max_column = termsize.ws_col / max_column;
-    
     // If formatted, make sure we can fit all the rows.
-    if (!cfg_oneshot && formatted && (entry_count / max_column > termsize.ws_row)) {
-        int page_length = (termsize.ws_row - entry_row_offset) * max_column;
+    if (!cfg_oneshot && formatted && (entry_lines > termsize.ws_row)) {
+        int page_length = (termsize.ws_row - entry_row_offset) * entry_columns;
         i_offset = selected / page_length * page_length;
         i_limit  = i_offset + page_length - 1;
     } else {
@@ -606,9 +626,10 @@ static void renew_display() {
     for (int i = i_offset; i <= i_limit && i < entry_count; ++i) {
         if (formatted) {
             // If this entry would line wrap, print a newline.
-            if (++next_column > max_column) {
+            if (++next_column > entry_columns) {
                 putchar('\n');
                 next_column = 1;
+                used_chars  = 0;
                 ++newline_count;
             }
         }
@@ -623,13 +644,13 @@ static void renew_display() {
         // Save cursor position for later use.
 
         if (formatted) {
-            entry_data[i].row = (i - i_offset) / max_column + entry_row_offset;
-            entry_data[i].col = (i - i_offset) % max_column * (avg_columns + ENTRY_DELIM_LEN) + 1;
-            write_entry(i);
+            entry_data[i].row = newline_count;
+            entry_data[i].col = used_chars + 1;
+            used_chars += write_entry(i, entry_column_widths[next_column - 1]);
         } else {
             entry_data[i].row = entry_row_offset;
-            entry_data[i].col = next_column + 1;
-            next_column += write_entry(i);
+            entry_data[i].col = used_chars + 1;
+            used_chars += write_entry(i, entry_data[i].len);
         }
     }
 
@@ -640,10 +661,6 @@ static void renew_display() {
         get_cursor_pos(&row_after, NULL);
         pos_status_bar.row = row_after - newline_count;
     }
-
-    // Save number of lines taken by entries.  Possibly different from newline_count.
-    entry_lines = entry_count / max_column;
-    if (entry_count % max_column > 0) entry_lines += 1;
 }
 
 static void refresh_display() {
@@ -667,19 +684,21 @@ static void refresh_display() {
         // Reflect changes in entry selection.
 
         if (entry_count >= 1) {
-            memcpy(selected_name, posix_entries[selected]->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
+            memcpy(selected_name,
+                   posix_entries[selected]->d_name,
+                   sizeof(*selected_name) * SELECTED_MAXLEN);
 
             if (selected_previously > SELECTED_NOT) {
                 printf("\e[%d;%df" ANSI_RESET,
-                        entry_data[selected_previously].row + pos_status_bar.row,
-                        entry_data[selected_previously].col);
-                write_entry(selected_previously);
+                       entry_data[selected_previously].row + pos_status_bar.row,
+                       entry_data[selected_previously].col);
+                write_entry(selected_previously, entry_data[selected_previously].len);
             }
 
             printf("\e[%d;%df" ANSI_INVERT,
                    entry_data[selected].row + pos_status_bar.row,
                    entry_data[selected].col);
-            write_entry(selected);
+            write_entry(selected, entry_data[selected].len);
         }
     }
 
@@ -752,33 +771,33 @@ static void handle_user_act(user_action act) {
     switch (act) {
     case USER_ACT_MV_UP:
         if (!formatted) break;
-        if (selected - max_column < SELECTED_MIN) {
+        if (selected - entry_columns < SELECTED_MIN) {
             // There is no entry above, so
             // move to the last row in the column.
-            int offset = max_column * (entry_lines - 1);
-            if (selected + offset > SELECTED_MAX) offset -= max_column;
+            int offset = entry_columns * (entry_lines - 1);
+            if (selected + offset > SELECTED_MAX) offset -= entry_columns;
             selected += offset;
         } else {
-            selected -= max_column;
+            selected -= entry_columns;
         }
         break;
     case USER_ACT_MV_DOWN:
         if (!formatted) break;
-        if (selected + max_column > SELECTED_MAX) {
+        if (selected + entry_columns > SELECTED_MAX) {
             // There is no entry below, so
             // move to the first row in the column.
-            int offset = max_column * (entry_lines - 1);
-            if (selected - offset < SELECTED_MIN) offset -= max_column;
+            int offset = entry_columns * (entry_lines - 1);
+            if (selected - offset < SELECTED_MIN) offset -= entry_columns;
             selected -= offset;
         } else {
-            selected += max_column;
+            selected += entry_columns;
         }
         break;
     case USER_ACT_MV_LEFT:
         if (formatted) {
             // Check for cursor wrap by column.
-            if (selected % max_column == 0) {
-                selected += max_column - 1;
+            if (selected % entry_columns == 0) {
+                selected += entry_columns - 1;
             } else {
                 --selected;
             }
@@ -795,9 +814,9 @@ static void handle_user_act(user_action act) {
         if (formatted) {
             // Check for cursor wrap by column.
             if (selected + 1 > SELECTED_MAX) {
-                selected -= selected % max_column;
-            } else if (selected % max_column == max_column - 1) {
-                selected -= max_column - 1;
+                selected -= selected % entry_columns;
+            } else if (selected % entry_columns == entry_columns - 1) {
+                selected -= entry_columns - 1;
             } else {
                 ++selected;
             }
