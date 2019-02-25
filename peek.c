@@ -212,7 +212,6 @@ static bool cfg_show_dotfiles = 0; //  (-a) If set, files starting with . will b
 static bool cfg_color         = 1; // !(-B) If set, color output.
 static bool cfg_clear_trace   = 0; //  (-c) If set, clear displayed text on exit.
 static bool cfg_indicate      = 0; //  (-F) If set, append indicators to entries.
-static bool cfg_format_hori   = 0; //  (-H) If set, format horizontally.
 static bool cfg_oneshot       = 0; //  (-o) If set, print listing and exit.  (AKA LS mode.)
 static bool cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
 
