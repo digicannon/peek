@@ -603,7 +603,8 @@ static void renew_display() {
             else                              hi = m;
         }
 
-        entry_columns = lo - 1;
+        // entry_columns will be at least 1.
+        entry_columns = (lo <= 1) ? 1 : lo - 1;
         entry_lines   = (entry_count - 1) / entry_columns + 1;
 
         entry_column_widths = realloc(entry_column_widths,
