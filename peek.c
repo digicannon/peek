@@ -32,6 +32,8 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include "wcwidth.h"
+
 #ifndef DEBUG
 #ifndef RELEASE
 #define DEBUG 1
@@ -91,18 +93,6 @@
 #define MIN_ENTRY_LEN   11
 #define ENTRY_DELIM     "  "
 #define ENTRY_DELIM_LEN 2
-
-// UTF8: If 8th bit is set, this code point is multiple bytes.
-// If both the 8th and 7th bits are set, this byte is not the first byte.
-// Therefore, only add to the print count if:
-// 1) This code point is only 1 byte (8th bit not set).
-// 2) The 8th bit is set but not the 7th.
-#define UTF8_COUNTABLE(c) ((c & 0xC0) != 0x80)
-// A character is printable if above the controls and not DEL.
-#define UTF8_PRINTABLE(c) (c > 0x1F && c != 0x7F)
-
-#define HEXPRINT_FORMAT "\\x%02X"
-#define HEXPRINT_LENGTH 4
 
 // Name of environment variable to set when executing a process.
 #define EXEC_ENV_NAME  "PEEK_CHILD"
@@ -269,20 +259,42 @@ static int display_filter(const struct dirent * ent) {
     return 1;
 }
 
-static int utf8_char_len(unsigned char c) {
-    if (UTF8_PRINTABLE(c)) {
-        if (UTF8_COUNTABLE(c)) return 1;
-    } else if (cfg_print_hex) {
-        if (UTF8_COUNTABLE(c)) return HEXPRINT_LENGTH;
-    }
-    return 0;
-}
-
 static int utf8_len(unsigned char * str) {
     int len = 0;
-    for (unsigned char * c = str; *c; ++c) {
-        len += utf8_char_len(*c);
+
+    uint32_t unicode = 0; // Complete unicode code point.
+    int uni_bytes = 0;    // How many bytes of the code point are left to read.
+
+    for (unsigned char * codepoint = str; *codepoint; ++codepoint) {
+        char c = *codepoint;
+
+        if (!(c & 0x80)) {
+            // The MSB is 0, so this is an ASCII character.
+            len += mk_wcwidth(c);
+        } else if ((c & 0xC0) == 0x80) {
+            // This byte is part of a multibyte codepoint.
+            unicode = unicode << 6; // Bytes 2-4 are 6 bits.
+            unicode |= c & 0x3F;    // OR in those 6 bits.
+            if (--uni_bytes == 0) len += mk_wcwidth(unicode);
+        } else {
+            // This is the start of a multibyte codepoint.
+
+            if ((c & 0xE0) == 0xC0) {
+                // MSBs are 110, starting a 2 byte codepoint.
+                unicode = c & 0x1F; // 5 LSBs.
+                uni_bytes = 1;
+            } else if ((c & 0xF0) == 0xE0) {
+                // MSBs are 1110, starting a 3 byte codepoint.
+                unicode = c & 0xF; // 4 LSBs.
+                uni_bytes = 2;
+            } else if ((c & 0xF8) == 0xF0) {
+                // MSBs are 11110, starting a 4 byte codepoint.
+                unicode = c & 7; // 3 LSBs.
+                uni_bytes = 3;
+            }
+        }
     }
+
     return len;
 }
 
@@ -472,27 +484,13 @@ static int write_entry(int index, int width) {
     char            d_child_indicator = entry_data[index].indicator;
 
     int used_chars = 0;
-    int char_len;
 
     // If enabled, print the corresponding color for the type.
     if (d_child_color) printf("%s", d_child_color);
     
     // Print the name of the entry.
-    for (unsigned char * c = (unsigned char *)d_child->d_name; *c; ++c) {
-        char_len = utf8_char_len(*c);
-
-        // This character is printable if
-        // it is above control characters and not DEL.
-        if (UTF8_PRINTABLE(*c)) {
-            putchar(*c);
-        } else if (cfg_print_hex) {
-            printf(HEXPRINT_FORMAT, (unsigned char)*c);
-        }
-
-        used_chars += char_len;
-    }
-
-    printf(ANSI_RESET);
+    printf("%s" ANSI_RESET, d_child->d_name);
+    used_chars += entry_data[index].len;
 
     // If enabled, print the corresponding indicator for the type.
     if (d_child_indicator) {
