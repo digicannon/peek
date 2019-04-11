@@ -94,10 +94,9 @@
 #define ENTRY_DELIM     "  "
 #define ENTRY_DELIM_LEN 2
 
-// Name of environment variable to set when executing a process.
-#define EXEC_ENV_NAME  "PEEK_CHILD"
-// Value of environment variable to set when executing a process.
-#define EXEC_ENV_VALUE "1"
+// Enivronment variables to set when executing a process.
+#define ENV_NAME_CHILD_ID "PEEK_CHILD"
+#define ENV_NAME_SELECTED "PEEK_SELECTED"
 
 // The program to open files.  OS dependant.
 #ifndef EXEC_NAME_OPENER
@@ -730,21 +729,40 @@ static void refresh_display() {
 // The last string in argv must be NULL.
 static void fork_exec(char * exec, char ** argv) {
     pid_t pid;
+    char * env_id_old;
+    long   env_id_int;
+    char   env_id_new[80];
 
     // Setup normal terminal environment and clear beyond the cursor.
     restore_tcattr();
     printf("\e[0J\e[2K");
     fflush(stdout);
 
+    // Get the parent peek's ID, if it exists.
+    // Malformed strings will "convert" to 0.
+    // Increment it and convert back to an environment string for the fork.
+
+    env_id_old = getenv(ENV_NAME_CHILD_ID);
+
+    if (env_id_old == NULL) {
+        strcpy(env_id_new, ENV_NAME_CHILD_ID "=1");
+    } else {
+        env_id_int = strtol(env_id_old, NULL, 10);
+        if (env_id_int < 0)        env_id_int = 0;
+        if (env_id_int < LONG_MAX) ++env_id_int;
+        sprintf(env_id_new, ENV_NAME_CHILD_ID "=%ld", env_id_int);
+    }
+
+    // Time to fork.
+
     pid = fork();
 
     if (pid > 0) {
         wait(NULL);
     } else if (pid == 0) {
-        putenv(EXEC_ENV_NAME "=" EXEC_ENV_VALUE);
+        putenv(env_id_new);
         execvp(exec, argv);
-        // If we got here, execvp failed.
-        exit(1);
+        exit(1); // If we got here, execvp failed.
     }
 
     replace_tcattr();
