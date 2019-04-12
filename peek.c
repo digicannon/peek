@@ -424,6 +424,14 @@ static void cd(char * to) {
     selected_previously = SELECTED_NOT;
 }
 
+// NOTE: Allocated with malloc & should be freed.
+static char * get_selected_fullpath() {
+    char * p = malloc(sizeof(*current_dir)
+                      * (current_dir_len + 1 + strlen(selected_name) + 1));
+    sprintf(p, "%s/%s", current_dir, selected_name);
+    return p;
+}
+
 static int get_stdin_chars_ahead() {
     int ahead;
     ioctl(STDIN_FILENO, FIONREAD, &ahead);
@@ -781,9 +789,16 @@ static void fork_exec_no_argv(char * exec, bool below_display) {
     fork_exec(exec, argv, below_display);
 }
 
+static void exec_selection() {
+    char * argv[2] = {get_selected_fullpath(), NULL};
+    fork_exec(argv[0], argv, true);
+    free(argv[0]);
+}
+
 static void open_selection(char * opener) {
-    char * argv[3] = {opener, selected_name, NULL};
+    char * argv[3] = {opener, get_selected_fullpath(), NULL};
     fork_exec(opener, argv, false);
+    free(argv[1]);
 }
 
 static void handle_user_act(user_action act) {
@@ -865,7 +880,7 @@ static void handle_user_act(user_action act) {
         open_selection(EXEC_NAME_EDITOR);
         break;
     case USER_ACT_ON_EXEC:
-        fork_exec_no_argv(selected_name, true);
+        exec_selection();
         break;
     case USER_ACT_ON_OPEN:
         open_selection(EXEC_NAME_OPENER);
