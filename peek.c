@@ -727,16 +727,23 @@ static void refresh_display() {
 
 // The first string in argv must be exec.
 // The last string in argv must be NULL.
-static void fork_exec(char * exec, char ** argv) {
+static void fork_exec(char * exec, char ** argv, bool below_display) {
     pid_t pid;
     char * env_id_old;
     long   env_id_int;
     char   env_id_new[80];
 
-    // Setup normal terminal environment and clear beyond the cursor.
+    // Setup normal terminal environment.
     restore_tcattr();
-    printf("\e[0J\e[2K");
-    fflush(stdout);
+
+    if (below_display) {
+        // Move cursor below the display.
+        for (int l = 0; l <= newline_count; ++l) putchar('\n');
+    } else {
+        // Clear the display.
+        printf("\e[0J\e[2K");
+        fflush(stdout);
+    }
 
     // Get the parent peek's ID, if it exists.
     // Malformed strings will "convert" to 0.
@@ -769,14 +776,14 @@ static void fork_exec(char * exec, char ** argv) {
     display_is_dirty = true;
 }
 
-static void fork_exec_no_argv(char * exec) {
+static void fork_exec_no_argv(char * exec, bool below_display) {
     char * argv[2] = {exec, NULL};
-    fork_exec(exec, argv);
+    fork_exec(exec, argv, below_display);
 }
 
 static void open_selection(char * opener) {
     char * argv[3] = {opener, selected_name, NULL};
-    fork_exec(opener, argv);
+    fork_exec(opener, argv, false);
 }
 
 static void handle_user_act(user_action act) {
@@ -858,14 +865,13 @@ static void handle_user_act(user_action act) {
         open_selection(EXEC_NAME_EDITOR);
         break;
     case USER_ACT_ON_EXEC:
-        fork_exec_no_argv(selected_name);
-        display_is_dirty = true;
+        fork_exec_no_argv(selected_name, true);
         break;
     case USER_ACT_ON_OPEN:
         open_selection(EXEC_NAME_OPENER);
         break;
     case USER_ACT_SHELL:
-        fork_exec_no_argv(SHELL_PATH);
+        fork_exec_no_argv(SHELL_PATH, true);
         break;
     }
 }
