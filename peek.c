@@ -740,6 +740,7 @@ static void fork_exec(char * exec, char ** argv, bool below_display) {
     char * env_id_old;
     long   env_id_int;
     char   env_id_new[80];
+    char * env_selected;
 
     // Setup normal terminal environment.
     restore_tcattr();
@@ -768,6 +769,12 @@ static void fork_exec(char * exec, char ** argv, bool below_display) {
         sprintf(env_id_new, ENV_NAME_CHILD_ID "=%ld", env_id_int);
     }
 
+    // Write the selected file name to the environment variables.
+
+    env_selected = malloc(sizeof(*env_selected)
+                          * strlen(ENV_NAME_SELECTED) + 1 + strlen(selected_name) + 1);
+    sprintf(env_selected, ENV_NAME_SELECTED "=%s", selected_name);
+
     // Time to fork.
 
     pid = fork();
@@ -776,6 +783,7 @@ static void fork_exec(char * exec, char ** argv, bool below_display) {
         wait(NULL);
     } else if (pid == 0) {
         putenv(env_id_new);
+        putenv(env_selected);
         execvp(exec, argv);
         exit(1); // If we got here, execvp failed.
     }
