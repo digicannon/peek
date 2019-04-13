@@ -791,7 +791,9 @@ static void fork_exec_no_argv(char * exec, bool below_display) {
 
 static void exec_selection() {
     char * argv[2] = {get_selected_fullpath(), NULL};
-    fork_exec(argv[0], argv, true);
+    if (access(argv[0], X_OK) == 0) {
+        fork_exec(argv[0], argv, true);
+    }
     free(argv[0]);
 }
 
