@@ -713,7 +713,6 @@ static void refresh_display() {
     if (cfg_oneshot) return;
 
     printf("\e[%d;%df\e[0K", pos_status_bar.row, pos_status_bar.col);
-    printf(ANSI_BOLD "%s" ANSI_RESET, selected_name);
 
     switch (prompt) {
     case PROMPT_ERR:
