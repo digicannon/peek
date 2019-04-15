@@ -95,8 +95,8 @@
 #define ENTRY_DELIM_LEN 2
 
 // Enivronment variables to set when executing a process.
-#define ENV_NAME_CHILD_ID "PEEK_CHILD"
-#define ENV_NAME_SELECTED "PEEK_SELECTED"
+#define ENV_NAME_CHILD_ID "PK_CHILD"
+#define ENV_NAME_SELECTED "PK_FILE"
 
 // The program to open files.  OS dependant.
 #ifndef EXEC_NAME_OPENER
@@ -786,6 +786,8 @@ static void fork_exec(char * exec, char ** argv, bool below_display) {
         execvp(exec, argv);
         exit(1); // If we got here, execvp failed.
     }
+
+    free(env_selected);
 
     replace_tcattr();
     display_is_dirty = true;
