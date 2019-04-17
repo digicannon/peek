@@ -62,7 +62,7 @@
  * Uses uint32_t instead of wchar_t.
  */
 
-#include <stdint.h>
+#include "wcwidth.h"
 
 struct interval {
     uint32_t first;
