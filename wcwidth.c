@@ -172,8 +172,7 @@ int mk_wcwidth(uint32_t ucs) {
     };
 
     /* test for 8-bit control characters */
-    if (ucs == 0) return 0;
-    if (ucs < 32 || (ucs >= 0x7f && ucs < 0xa0)) return -1;
+    if (ucs < 32 || (ucs >= 0x7F && ucs < 0xA0)) return 0;
 
     /* binary search in table of non-spacing characters */
     if (bisearch(ucs, combining, sizeof(combining) / sizeof(struct interval) - 1)) {

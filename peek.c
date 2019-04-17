@@ -496,7 +496,11 @@ static int write_entry(int index, int width) {
     if (d_child_color) printf("%s", d_child_color);
     
     // Print the name of the entry.
-    printf("%s" ANSI_RESET, d_child->d_name);
+    for (char * c = d_child->d_name; *c; ++c) {
+        // Don't print ACII control characters.
+        if (!(*c < 32 || (*c >= 0x7F && *c < 0xA0))) putchar(*c);
+    }
+    printf(ANSI_RESET);
     used_chars += entry_data[index].len;
 
     // If enabled, print the corresponding indicator for the type.
