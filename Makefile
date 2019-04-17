@@ -15,7 +15,7 @@
 #   You should have received a copy of the GNU General Public License
 #   along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-SRC = $(wildcard *.c)
+SRC = peek.c wcwidth.c
 OBJ = $(SRC:.c=.o)
 EXEC ?= pk
 
@@ -23,7 +23,7 @@ CFLAGS ?= -Wall -DDEBUG=1 -g -pipe
 CFLAGS_RELEASE ?= -Wall -DDEBUG=0 -g0 -O2 -flto -march=native -fpie -Wl,-pie -pipe
 
 $(EXEC): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $(OBJ)
 
 .PHONY: clean release install
 

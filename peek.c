@@ -663,7 +663,8 @@ static void renew_display() {
         }
     }
 
-    if (newline_count) {
+    //if (newline_count) {
+    if (newline_count && !cfg_oneshot) {
         // The terminal may have scrolled and we need to adjust the saved position.
         // Move cursor up to adjust for possible overflow and save it.
         int row_after;
