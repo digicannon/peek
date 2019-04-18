@@ -50,8 +50,21 @@
 #define ANSI_BOLD   "\e[1m"
 #define ANSI_INVERT "\e[7m"
 
-#define ANSI_SHOW_CURSOR "\e[?25h"
-#define ANSI_HIDE_CURSOR "\e[?25l"
+#define ANSI_CURSOR_SHOW "\e[?25h"
+#define ANSI_CURSOR_HIDE "\e[?25l"
+
+#define ANSI_CURSOR_UP    "\e[%dA"
+#define ANSI_CURSOR_DOWN  "\e[%dB"
+#define ANSI_CURSOR_RIGHT "\e[%dC"
+#define ANSI_CURSOR_LEFT  "\e[%dD"
+
+#define ANSI_ERASE_TO_DISP_END   "\e[0J"
+#define ANSI_ERASE_TO_DISP_START "\e[1J"
+#define ANSI_ERASE_DISP          "\e[2J"
+
+#define ANSI_ERASE_TO_LINE_END   "\e[0K"
+#define ANSI_ERASE_TO_LINE_START "\e[1K"
+#define ANSI_ERASE_LINE          "\e[2K"
 
 #define VERSION "0.1.0"
 #if (DEBUG == 1)
@@ -166,7 +179,6 @@ static peek_entry *     entry_data    = NULL;
 static int              entry_count   = 0; // Number of entries in current dir.
 
 static bool    display_is_dirty = true; // Force display redraw when true.
-static termpos pos_status_bar;          // Column is the start of the selection name.
 static int     entry_row_offset = 0;
 
 static bool formatted;     // If true, output will do column formatting.
@@ -205,7 +217,7 @@ static bool cfg_oneshot       = 0; //  (-o) If set, print listing and exit.  (AK
 static bool cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
 
 static void restore_tcattr() {
-    printf(ANSI_SHOW_CURSOR);
+    printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_old);
 }
@@ -246,7 +258,7 @@ static void replace_tcattr() {
     }
 
     tcsetattr(STDIN_FILENO, TCSANOW, &tcattr_raw);
-    printf(ANSI_HIDE_CURSOR);
+    printf(ANSI_CURSOR_HIDE);
 }
 
 static int display_filter(const struct dirent * ent) {
@@ -439,7 +451,7 @@ static int get_stdin_chars_ahead() {
 }
 
 // NOTE: This will eat everything in stdin.
-static void get_cursor_pos(int * row, int * col) {
+__attribute__((deprecated)) static void get_cursor_pos(int * row, int * col) {
     char c;
 
     if (row) *row = 0;
@@ -575,7 +587,6 @@ static void renew_display() {
         printf(ANSI_INVERT ANSI_BOLD "%s", current_dir);
         if (current_dir[0] != 0 && current_dir[1] != 0) putchar('/');
 
-        get_cursor_pos(&pos_status_bar.row, &pos_status_bar.col);
         printf(ANSI_RESET "\n");
         ++newline_count;
     }
@@ -662,14 +673,24 @@ static void renew_display() {
             used_chars += write_entry(i, entry_data[i].len);
         }
     }
+}
 
-    if (newline_count && !cfg_oneshot) {
-        // The terminal may have scrolled and we need to adjust the saved position.
-        // Move cursor up to adjust for possible overflow and save it.
-        int row_after;
-        get_cursor_pos(&row_after, NULL);
-        pos_status_bar.row = row_after - newline_count;
+static void refresh_entry(int index) {
+    if (index == selected) printf(ANSI_INVERT);
+    else                   printf(ANSI_RESET);
+
+    printf(ANSI_CURSOR_LEFT ANSI_CURSOR_DOWN,
+           termsize.ws_col, entry_data[index].row);
+
+    // Prevent terminals forcing at least 1 column forward.
+    if (entry_data[index].col - 1 > 0) {
+        printf(ANSI_CURSOR_RIGHT, entry_data[index].col - 1);
     }
+
+    write_entry(index, entry_data[index].len);
+
+    // Restore cursor to previous row.
+    printf(ANSI_CURSOR_UP, entry_data[index].row);
 }
 
 static void refresh_display() {
@@ -679,6 +700,7 @@ static void refresh_display() {
 
     validate_selection_index();
 
+
     if (display_is_dirty
         || new_termsize.ws_row != termsize.ws_row
         || new_termsize.ws_col != termsize.ws_col) {
@@ -687,7 +709,12 @@ static void refresh_display() {
         // so we need to completely redraw.
 
         termsize = new_termsize;
+
+        // Move to start of row, print, then move back to the original row.
+        printf(ANSI_CURSOR_LEFT, termsize.ws_col);
         renew_display();
+        printf(ANSI_CURSOR_UP, newline_count);
+
         display_is_dirty = false;
     } else {
         // Reflect changes in entry selection.
@@ -698,16 +725,10 @@ static void refresh_display() {
                    sizeof(*selected_name) * SELECTED_MAXLEN);
 
             if (selected_previously > SELECTED_NOT) {
-                printf("\e[%d;%df" ANSI_RESET,
-                       entry_data[selected_previously].row + pos_status_bar.row,
-                       entry_data[selected_previously].col);
-                write_entry(selected_previously, entry_data[selected_previously].len);
+                refresh_entry(selected_previously);
             }
 
-            printf("\e[%d;%df" ANSI_INVERT,
-                   entry_data[selected].row + pos_status_bar.row,
-                   entry_data[selected].col);
-            write_entry(selected, entry_data[selected].len);
+            refresh_entry(selected);
         }
     }
 
@@ -716,8 +737,12 @@ static void refresh_display() {
     // But not if we're a oneshot.
     if (cfg_oneshot) return;
 
-    printf("\e[%d;%df\e[0K", pos_status_bar.row, pos_status_bar.col);
+    printf(ANSI_CURSOR_LEFT ANSI_CURSOR_RIGHT ANSI_ERASE_TO_LINE_END,
+           termsize.ws_col, utf8_len((unsigned char *)current_dir) + 1);
 
+    // TODO: If this results in a line wrap,
+    // we won't be on the line we think we're on.
+    // Need to prevent/account for this.
     switch (prompt) {
     case PROMPT_ERR:
         printf("\e[31m"); // Foreground color red.
@@ -731,9 +756,9 @@ static void refresh_display() {
     default: break;
     }
 
-    // Return to starting row for next display.
-
-    printf("\e[%d;%df", pos_status_bar.row, 0);
+    // This currently isn't necessary, but in case the cursor is showing
+    // it would be nice to keep it at the top left of the display.
+    printf(ANSI_CURSOR_LEFT, termsize.ws_col);
 }
 
 // The first string in argv must be exec.
