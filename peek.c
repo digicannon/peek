@@ -160,8 +160,8 @@ typedef struct peek_entry {
     int len; // Printed UTF8 length, not number of bytes.
     const char * color;
     char indicator;
-    int row;
-    int col;
+    int cells_down;
+    int cells_over;
 } peek_entry;
 
 enum prompt_t {
@@ -663,13 +663,13 @@ static void renew_display() {
 
         // Save cursor position for later use.
 
+        entry_data[i].cells_over = used_chars;
+
         if (formatted) {
-            entry_data[i].row = newline_count;
-            entry_data[i].col = used_chars + 1;
+            entry_data[i].cells_down = newline_count;
             used_chars += write_entry(i, entry_column_widths[next_column - 1]);
         } else {
-            entry_data[i].row = entry_row_offset;
-            entry_data[i].col = used_chars + 1;
+            entry_data[i].cells_down = entry_row_offset;
             used_chars += write_entry(i, entry_data[i].len);
         }
     }
@@ -680,17 +680,17 @@ static void refresh_entry(int index) {
     else                   printf(ANSI_RESET);
 
     printf(ANSI_CURSOR_LEFT ANSI_CURSOR_DOWN,
-           termsize.ws_col, entry_data[index].row);
+           termsize.ws_col, entry_data[index].cells_down);
 
     // Prevent terminals forcing at least 1 column forward.
-    if (entry_data[index].col - 1 > 0) {
-        printf(ANSI_CURSOR_RIGHT, entry_data[index].col - 1);
+    if (entry_data[index].cells_over > 0) {
+        printf(ANSI_CURSOR_RIGHT, entry_data[index].cells_over);
     }
 
     write_entry(index, entry_data[index].len);
 
     // Restore cursor to previous row.
-    printf(ANSI_CURSOR_UP, entry_data[index].row);
+    printf(ANSI_CURSOR_UP, entry_data[index].cells_down);
 }
 
 static void refresh_display() {
@@ -699,7 +699,6 @@ static void refresh_display() {
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &new_termsize);
 
     validate_selection_index();
-
 
     if (display_is_dirty
         || new_termsize.ws_row != termsize.ws_row
