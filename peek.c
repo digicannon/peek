@@ -151,11 +151,6 @@ typedef enum user_action {
     USER_ACT_SHELL,
 } user_action;
 
-typedef struct termpos {
-    int row;
-    int col;
-} termpos;
-
 typedef struct peek_entry {
     int len; // Printed UTF8 length, not number of bytes.
     const char * color;
@@ -178,8 +173,8 @@ static struct dirent ** posix_entries = NULL;
 static peek_entry *     entry_data    = NULL;
 static int              entry_count   = 0; // Number of entries in current dir.
 
-static bool    display_is_dirty = true; // Force display redraw when true.
-static int     entry_row_offset = 0;
+static bool display_is_dirty = true; // Force display redraw when true.
+static int  entry_row_offset = 0;
 
 static bool formatted;     // If true, output will do column formatting.
 static int  total_length;  // Length of output without newlines.
@@ -442,44 +437,6 @@ static char * get_selected_fullpath() {
                       * (current_dir_len + 1 + strlen(selected_name) + 1));
     sprintf(p, "%s/%s", current_dir, selected_name);
     return p;
-}
-
-static int get_stdin_chars_ahead() {
-    int ahead;
-    ioctl(STDIN_FILENO, FIONREAD, &ahead);
-    return ahead;
-}
-
-// NOTE: This will eat everything in stdin.
-__attribute__((deprecated)) static void get_cursor_pos(int * row, int * col) {
-    char c;
-
-    if (row) *row = 0;
-    if (col) *col = 0;
-
-    // Attempt to clear out stdin.
-    // CLEANUP: Is read with a NULL buffer really allowed?
-    read(STDIN_FILENO, NULL, get_stdin_chars_ahead());
-
-    // Request cursor position and scan for the response "\e[%d;%dR".
-    // If we read in something that started out correct and became malformed,
-    // it isn't the cursor position response so start over.
-    printf("\e[6n");
-scan_for_esc:
-    while (getchar() != 0x1B);               // Scan for escape.
-    if (getchar() != '[') goto scan_for_esc; // Scan for [
-    while (1) {                              // Scan for %d;
-        c = getchar();
-        if (c == ';') break;
-        else if (c < '0' || c > '9') goto scan_for_esc;
-        if (row) *row = (*row * 10) + (c - '0');
-    }
-    while (1) {                              // Scan for %dR
-        c = getchar();
-        if (c == 'R') break;
-        else if (c < '0' || c > '9') goto scan_for_esc;
-        if (col) *col = (*col * 10) + (c - '0');
-    }
 }
 
 // Make sure the selection isn't out of bounds.
