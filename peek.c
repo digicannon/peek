@@ -46,13 +46,6 @@
 #warning Building release build!
 #endif
 
-#define ANSI_RESET  "\e[m"
-#define ANSI_BOLD   "\e[1m"
-#define ANSI_INVERT "\e[7m"
-
-#define ANSI_CURSOR_SHOW "\e[?25h"
-#define ANSI_CURSOR_HIDE "\e[?25l"
-
 #define ANSI_CURSOR_UP    "\e[%dA"
 #define ANSI_CURSOR_DOWN  "\e[%dB"
 #define ANSI_CURSOR_RIGHT "\e[%dC"
@@ -65,6 +58,15 @@
 #define ANSI_ERASE_TO_LINE_END   "\e[0K"
 #define ANSI_ERASE_TO_LINE_START "\e[1K"
 #define ANSI_ERASE_LINE          "\e[2K"
+
+#define ANSI_ERASE_ALL_AHEAD     "\e[0J\e[2K"
+
+#define ANSI_RESET  "\e[m"
+#define ANSI_BOLD   "\e[1m"
+#define ANSI_INVERT "\e[7m"
+
+#define ANSI_CURSOR_SHOW "\e[?25h"
+#define ANSI_CURSOR_HIDE "\e[?25l"
 
 #define VERSION "0.1.0"
 #if (DEBUG == 1)
@@ -219,8 +221,7 @@ static void restore_tcattr() {
 
 static void restore_tcattr_and_clean() {
     if (cfg_clear_trace) {
-        // Clear everything beyond the cursor.
-        printf(ANSI_ERASE_TO_DISP_END ANSI_ERASE_LINE);
+        printf(ANSI_ERASE_ALL_AHEAD);
     } else {
         // Move down a line for every line printed.
         printf(ANSI_CURSOR_DOWN "\n", newline_count);
@@ -527,10 +528,7 @@ static void renew_display() {
 
     if (posix_entries == NULL) run_scan();
 
-    // Return to start of last display and erase previous.
-    // 0J erases below cursor, 2K erases to the right.
-
-    printf("\e[0J\e[2K");
+    printf(ANSI_ERASE_ALL_AHEAD);
 
     // If enabled, print current directory name.
 
@@ -728,7 +726,7 @@ static void fork_exec(char * exec, char ** argv, bool below_display) {
         for (int l = 0; l <= newline_count; ++l) putchar('\n');
     } else {
         // Clear the display.
-        printf("\e[0J\e[2K");
+        printf(ANSI_ERASE_ALL_AHEAD);
         fflush(stdout);
     }
 
