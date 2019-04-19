@@ -218,18 +218,12 @@ static void restore_tcattr() {
 }
 
 static void restore_tcattr_and_clean() {
-    if (cfg_oneshot) {
-        // The cursor is never moved in oneshot mode,
-        // so just print a newline to finish output.
-        putchar('\n');
+    if (cfg_clear_trace) {
+        // Clear everything beyond the cursor.
+        printf(ANSI_ERASE_TO_DISP_END ANSI_ERASE_LINE);
     } else {
-        if (cfg_clear_trace) {
-            // Clear everything beyond the cursor.
-            printf("\e[0J\e[2K");
-        } else {
-            // Move down a line for every line printed.
-            for (int l = 0; l <= newline_count; ++l) putchar('\n');
-        }
+        // Move down a line for every line printed.
+        printf(ANSI_CURSOR_DOWN "\n", newline_count);
     }
 
     restore_tcattr();
