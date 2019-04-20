@@ -34,4 +34,4 @@ release: clean
 	$(MAKE) $(EXEC) CFLAGS="$(CFLAGS_RELEASE)"
 
 install: release
-	sudo cp $(EXEC) /usr/local/bin/
+	cp $(EXEC) /usr/local/bin/
