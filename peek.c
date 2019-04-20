@@ -512,7 +512,7 @@ static bool valid_column_count(int cols, bool write_widths) {
         if (col < cols - 1) longest += ENTRY_DELIM_LEN;
         if (write_widths) entry_column_widths[col] = longest;
         width += longest;
-        if (width > termsize.ws_col) return false;
+        if (width >= termsize.ws_col) return false;
     }
 
     return true;
