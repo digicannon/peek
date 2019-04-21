@@ -75,19 +75,19 @@
 #define MSG_VERSION "Peek " VERSION "\n"
 #endif
 
-#define SHORT_FLAGS "aBcFhoxv"
+#define SHORT_FLAGS "AaBcFohv"
 #define MSG_USAGE   "Usage: %s [-" SHORT_FLAGS "] [<directory>]"
 #define MSG_INVALID MSG_USAGE "\nTry '%s -h' for more information.\n"
 #define MSG_HELP MSG_USAGE "\nInteractive exploration of directories on the command line.\n"              \
                            "\nFlags:\n"                                                                   \
-                           "  -a\tShow files starting with . (hidden by default).\n"                      \
+                           "  -A\tShow files starting with . (hidden by default).\n"                      \
+                           "  -a\tDuplicate of -a.\n"                                                     \
                            "  -B\tDon't output color.\n"                                                  \
                            "  -c\tClear listing on exit.  Ignored with -o.\n"                             \
                            "  -F\tAppend ls style indicators to the end of entries.\n"                    \
-                           "  -h\tPrint this message and exit.\n"                                         \
                            "  -o\tPrint listing and exit.  AKA LS mode.\n"                                \
+                           "  -h\tPrint this message and exit.\n"                                         \
                            "  -v\tPrint version and exit.\n"                                              \
-                           "  -x\tPrint unprintable characters as hex.  Carriage return would be \\0D.\n" \
                            "\nKeys:\n"                                                                    \
                            "   F10|Q \tQuit.\n"                                                           \
                            "   BS|DEL\tOpen parent directory.\n"                                          \
@@ -211,7 +211,6 @@ static bool cfg_color         = 1; // !(-B) If set, color output.
 static bool cfg_clear_trace   = 0; //  (-c) If set, clear displayed text on exit.
 static bool cfg_indicate      = 0; //  (-F) If set, append indicators to entries.
 static bool cfg_oneshot       = 0; //  (-o) If set, print listing and exit.  (AKA LS mode.)
-static bool cfg_print_hex     = 0; //  (-x) If set, print unprintable characters as hex.
 
 static void restore_tcattr() {
     printf(ANSI_CURSOR_SHOW);
@@ -886,12 +885,12 @@ int main(int argc, char ** argv) {
     setlocale(LC_ALL, "");
 
     while ((flag = getopt(argc, argv, SHORT_FLAGS)) != -1) { switch(flag) {
+    case 'A':
     case 'a': cfg_show_dotfiles = 1; break;
     case 'B': cfg_color         = 0; break;
     case 'c': cfg_clear_trace   = 1; break;
     case 'F': cfg_indicate      = 1; break;
     case 'o': cfg_oneshot       = 1; break;
-    case 'x': cfg_print_hex     = 1; break;
     case 'h': printf(MSG_HELP, argv[0]); return 0;
     case 'v': printf(MSG_VERSION); return 0;
     case '?': fprintf(stderr, MSG_INVALID, argv[0], argv[0]); return 1;
