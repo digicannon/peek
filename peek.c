@@ -68,7 +68,7 @@
 #define ANSI_CURSOR_SHOW "\e[?25h"
 #define ANSI_CURSOR_HIDE "\e[?25l"
 
-#define VERSION "0.2.0"
+#define VERSION "0.2.1"
 #if (DEBUG == 1)
 #define MSG_VERSION "Peek " VERSION "-debug\n"
 #else
@@ -133,14 +133,6 @@
 // The program to edit files in the terminal.
 #ifndef EXEC_NAME_EDITOR
     #define EXEC_NAME_EDITOR "vim"
-#endif
-
-// TEMP: This should be /bin/sh by default.
-// /bin/sh is required by POSIX to exist.
-// However, it is rarely the default interactive shell,
-// so this must be customizable.
-#ifndef SHELL_PATH
-    #define SHELL_PATH "/bin/bash"
 #endif
 
 typedef enum user_action {
@@ -218,6 +210,10 @@ static bool cfg_color         = 1; // !(-B) If set, color output.
 static bool cfg_clear_trace   = 0; //  (-c) If set, clear displayed text on exit.
 static bool cfg_indicate      = 0; //  (-F) If set, append indicators to entries.
 static bool cfg_oneshot       = 0; //  (-o) If set, print listing and exit.  (AKA LS mode.)
+
+// The value here is the value if getenv("SHELL") returns NULL.
+// /bin/sh is guaranteed by POSIX to exist.
+static char * cfg_shell_path = "/bin/sh";
 
 static void restore_tcattr() {
     printf(ANSI_CURSOR_SHOW);
@@ -913,7 +909,7 @@ static void handle_user_act(user_action act) {
         prompt_buffer_i = 0;
         break;
     case USER_ACT_SHELL:
-        fork_exec_no_argv(SHELL_PATH, true);
+        fork_exec_no_argv(cfg_shell_path, true);
         break;
     }
 }
@@ -945,6 +941,15 @@ int main(int argc, char ** argv) {
 
     // Configure terminal to our needs.
     replace_tcattr();
+
+    // Figure out what shell we're using.
+    {
+        char * env_shell = getenv("SHELL");
+
+        if (env_shell) {
+            cfg_shell_path = env_shell;
+        }
+    }
 
 display_then_wait:
     refresh_display();
