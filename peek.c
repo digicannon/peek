@@ -150,6 +150,7 @@ typedef enum user_action {
     USER_ACT_ON_EDIT,
     USER_ACT_ON_EXEC,
     USER_ACT_ON_OPEN,
+    USER_ACT_SEARCH,
     USER_ACT_SHELL,
 } user_action;
 
@@ -165,7 +166,8 @@ enum prompt_t {
     PROMPT_NONE,
     PROMPT_ERR,
     PROMPT_MSG,
-    PROMPT_FOR,
+    PROMPT_CMD,
+    PROMPT_SEARCH,
 } prompt = PROMPT_NONE;
 
 static char * current_dir     = NULL;
@@ -201,6 +203,7 @@ static char selected_name[SELECTED_MAXLEN];
 
 #define PROMPT_MAXLEN 80
 static char prompt_buffer[PROMPT_MAXLEN];
+static size_t prompt_buffer_i = 0;
 
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
@@ -230,7 +233,6 @@ static void restore_tcattr_and_clean() {
 }
 
 // Create raw terminal mode to stop stdin buffer from breaking key press detection.
-// http://pubs.opengroup.org/onlinepubs/000095399/basedefs/termios.h.html#tag_13_74_03_06
 static void replace_tcattr() {
     static bool first_time = true;
 
@@ -391,6 +393,27 @@ static void run_scan() {
         total_length += len;
         if (entry_data[i].indicator) ++total_length;
         total_length += ENTRY_DELIM_LEN;
+    }
+}
+
+static void perform_search() {
+    const char * search_ptr;
+    const char * entry_ptr;
+
+    for (int i = 0; i < entry_count; ++i) {
+        search_ptr = prompt_buffer;
+        entry_ptr  = posix_entries[i]->d_name;
+
+        for (; *search_ptr && *entry_ptr; ++search_ptr, ++entry_ptr) {
+            if (*search_ptr != *entry_ptr) goto next;
+        }
+
+        selected_previously = selected;
+        selected = i;
+        return;
+
+next:
+        continue;
     }
 }
 
@@ -697,8 +720,15 @@ static void refresh_display() {
         printf(ENTRY_DELIM "%s" ANSI_RESET, prompt_buffer);
         prompt = PROMPT_NONE;
         break;
-    case PROMPT_FOR:
-        printf(ENTRY_DELIM ":%s", prompt_buffer);
+    case PROMPT_CMD:
+    case PROMPT_SEARCH:
+        printf(ENTRY_DELIM);
+        if (prompt == PROMPT_SEARCH) {
+            putchar('/');
+        } else {
+            putchar(':');
+        }
+        printf("%s" ANSI_INVERT " " ANSI_RESET, prompt_buffer);
         break;
     default: break;
     }
@@ -872,6 +902,11 @@ static void handle_user_act(user_action act) {
     case USER_ACT_ON_OPEN:
         open_selection(EXEC_NAME_OPENER);
         break;
+    case USER_ACT_SEARCH:
+        prompt = PROMPT_SEARCH;
+        memset(prompt_buffer, 0, sizeof(prompt_buffer));
+        prompt_buffer_i = 0;
+        break;
     case USER_ACT_SHELL:
         fork_exec_no_argv(SHELL_PATH, true);
         break;
@@ -915,68 +950,97 @@ display_then_wait:
     // Not all keyboards have these letters!
 
 wait_for_user_act:
-    switch (getchar()) {
-    default: goto wait_for_user_act;
-    case 0x08: // BACKSPACE
-    case 0x7F: // DEL
-        handle_user_act(USER_ACT_CD_PARENT);
-        break;
-    case 0x1B: // ESC
-        // Eat escape sequence start, then match the code.
-        getchar();
+    if (prompt != PROMPT_CMD && prompt != PROMPT_SEARCH) {
         switch (getchar()) {
-        case '2': // Possible F9-F12.
-            // F10 is "^[[21~".
-            if (getchar() == '1' && getchar() == '~') {
-                goto quit;
+        default: goto wait_for_user_act;
+        case 0: goto quit;
+        case 0x08: // BACKSPACE
+        case 0x7F: // DEL
+            handle_user_act(USER_ACT_CD_PARENT);
+            break;
+        case 0x1B: // ESC
+            // Eat escape sequence start, then match the code.
+            getchar();
+            switch (getchar()) {
+            case '2': // Possible F9-F12.
+                // F10 is "^[[21~".
+                if (getchar() == '1' && getchar() == '~') {
+                    goto quit;
+                }
+                break;
+            case 'A': // Up Arrow
+                handle_user_act(USER_ACT_MV_UP);
+                break;
+            case 'B': // Down Arrow
+                handle_user_act(USER_ACT_MV_DOWN);
+                break;
+            case 'C': // Right Arrow
+                handle_user_act(USER_ACT_MV_RIGHT);
+                break;
+            case 'D': // Left Arrow
+                handle_user_act(USER_ACT_MV_LEFT);
+                break;
             }
             break;
-        case 'A': // Up Arrow
-            handle_user_act(USER_ACT_MV_UP);
+        case '\n':
+            handle_user_act(USER_ACT_CD_SELECT);
             break;
-        case 'B': // Down Arrow
-            handle_user_act(USER_ACT_MV_DOWN);
+        case '/':
+            handle_user_act(USER_ACT_SEARCH);
             break;
-        case 'C': // Right Arrow
-            handle_user_act(USER_ACT_MV_RIGHT);
+        case 'E': case 'e':
+            handle_user_act(USER_ACT_ON_EDIT);
             break;
-        case 'D': // Left Arrow
+        case 'H': case 'h':
             handle_user_act(USER_ACT_MV_LEFT);
             break;
+        case 'J': case 'j':
+            handle_user_act(USER_ACT_MV_DOWN);
+            break;
+        case 'K': case 'k':
+            handle_user_act(USER_ACT_MV_UP);
+            break;
+        case 'L': case 'l':
+            handle_user_act(USER_ACT_MV_RIGHT);
+            break;
+        case 'O': case 'o':
+            handle_user_act(USER_ACT_ON_OPEN);
+            break;
+        case 'Q': case 'q':
+            goto quit;
+        case 'R': case 'r':
+            handle_user_act(USER_ACT_CD_RELOAD);
+            break;
+        case 'S': case 's':
+            handle_user_act(USER_ACT_SHELL);
+            break;
+        case 'X': case 'x':
+            handle_user_act(USER_ACT_ON_EXEC);
+            break;
         }
-        break;
-    case '\n':
-        handle_user_act(USER_ACT_CD_SELECT);
-        break;
-    case 'E': case 'e':
-        handle_user_act(USER_ACT_ON_EDIT);
-        break;
-    case 'H': case 'h':
-        handle_user_act(USER_ACT_MV_LEFT);
-        break;
-    case 'J': case 'j':
-        handle_user_act(USER_ACT_MV_DOWN);
-        break;
-    case 'K': case 'k':
-        handle_user_act(USER_ACT_MV_UP);
-        break;
-    case 'L': case 'l':
-        handle_user_act(USER_ACT_MV_RIGHT);
-        break;
-    case 'O': case 'o':
-        handle_user_act(USER_ACT_ON_OPEN);
-        break;
-    case 'Q': case 'q':
-        goto quit;
-    case 'R': case 'r':
-        handle_user_act(USER_ACT_CD_RELOAD);
-        break;
-    case 'S': case 's':
-        handle_user_act(USER_ACT_SHELL);
-        break;
-    case 'X': case 'x':
-        handle_user_act(USER_ACT_ON_EXEC);
-        break;
+    } else {
+        char c = getchar();
+
+        switch (c) {
+        case 0x08: // BACKSPACE
+        case 0x7F: // DEL
+            if (prompt_buffer_i > 0) {
+                prompt_buffer[--prompt_buffer_i] = 0;
+                perform_search();
+            }
+            break;
+        case '\n':
+            handle_user_act(USER_ACT_CD_SELECT);
+        case 0x1B: // ESC
+            prompt = PROMPT_NONE;
+            break;
+        default:
+            if (prompt_buffer_i >= PROMPT_MAXLEN - 1) break;
+            prompt_buffer[prompt_buffer_i++] = c;
+            prompt_buffer[prompt_buffer_i] = 0;
+            perform_search();
+            break;
+        }
     }
 
     goto display_then_wait;
