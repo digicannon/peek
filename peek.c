@@ -68,7 +68,7 @@
 #define ANSI_CURSOR_SHOW "\e[?25h"
 #define ANSI_CURSOR_HIDE "\e[?25l"
 
-#define VERSION "0.1.0"
+#define VERSION "0.2.0"
 #if (DEBUG == 1)
 #define MSG_VERSION "Peek " VERSION "-debug\n"
 #else
@@ -88,7 +88,7 @@
                            "  -o\tPrint listing and exit.  AKA LS mode.\n"                                \
                            "  -h\tPrint this message and exit.\n"                                         \
                            "  -v\tPrint version and exit.\n"                                              \
-                           "\nKeys:\n"                                                                    \
+                           "\nNormal Mode:\n"                                                             \
                            "   F10|Q \tQuit.\n"                                                           \
                            "   BS|DEL\tOpen parent directory.\n"                                          \
                            "   Enter \tOpen selected directory.\n"                                        \
@@ -100,7 +100,11 @@
                            "   O\tOpen selected entry.\n"                                                 \
                            "   R\tRefresh directory listing.\n"                                           \
                            "   S\tOpen shell.\n"                                                          \
-                           "   X\tExecute selected entry.\n"
+                           "   X\tExecute selected entry.\n"                                              \
+                           "   /\tSearch mode.\n"                                                         \
+                           "\nSearch Mode:\n"                                                             \
+                           "   Escape\tEnd search.\n"                                                     \
+                           "   Enter \tEnd search and open matched directory.\n"
 #define MSG_CANT_SCAN "could not scan"
 #define MSG_EMPTY     "empty"
 
@@ -753,6 +757,7 @@ static void fork_exec(char * exec, char ** argv, bool below_display) {
     if (below_display) {
         // Move cursor below the display.
         for (int l = 0; l <= newline_count; ++l) putchar('\n');
+        printf("$ %s\n", exec);
     } else {
         // Clear the display.
         printf(ANSI_ERASE_ALL_AHEAD);
