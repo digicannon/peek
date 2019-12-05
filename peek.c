@@ -191,9 +191,8 @@ static int i_limit;
 #define SELECTED_MAX (entry_count - 1)
 static int selected            = SELECTED_MIN;
 static int selected_previously = SELECTED_NOT;
-// TODO: This size should not be assumed anymore.
-#define SELECTED_MAXLEN 256
-static char selected_name[SELECTED_MAXLEN];
+static char * selected_name;
+static size_t selected_name_allocated_len = 256; // Allocated length of selected_name.  Includes null terminator!
 
 #define PROMPT_MAXLEN 80
 static char prompt_buffer[PROMPT_MAXLEN];
@@ -538,6 +537,19 @@ static bool valid_column_count(int cols, bool write_widths) {
     return true;
 }
 
+static void set_selected_name(char * new_name) {
+    size_t new_name_len = strlen(new_name) + 1;
+
+    if (!selected_name || new_name_len > selected_name_allocated_len) {
+        selected_name = realloc(selected_name, sizeof(*selected_name) * new_name_len);
+        selected_name_allocated_len = new_name_len;
+    }
+
+    memcpy(selected_name,
+            new_name,
+            sizeof(*selected_name) * new_name_len);
+}
+
 static void renew_display() {
     // If formatting, this will be the next format column to use.
     int next_column = 0;
@@ -626,7 +638,7 @@ static void renew_display() {
         // If this is the currently selected entry,
         // copy the name into the selected name buffer and highlight it.
         if (!cfg_oneshot && i == selected) {
-            memcpy(selected_name, posix_entries[i]->d_name, sizeof(*selected_name) * SELECTED_MAXLEN);
+            set_selected_name(posix_entries[i]->d_name);
             printf(ANSI_INVERT);
         }
 
@@ -688,9 +700,7 @@ static void refresh_display() {
         // Reflect changes in entry selection.
 
         if (entry_count >= 1) {
-            memcpy(selected_name,
-                   posix_entries[selected]->d_name,
-                   sizeof(*selected_name) * SELECTED_MAXLEN);
+            set_selected_name(posix_entries[selected]->d_name);
 
             if (selected_previously > SELECTED_NOT) {
                 refresh_entry(selected_previously);
@@ -933,6 +943,8 @@ int main(int argc, char ** argv) {
 
     // If there is a remaining argument, it is the directory to start in.
     if (optind < argc) start_dir = argv[optind];
+
+    selected_name = malloc(sizeof(*selected_name) * selected_name_allocated_len);
 
     cd(start_dir);
     if (prompt) goto quit;
