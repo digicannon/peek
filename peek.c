@@ -194,9 +194,10 @@ static int selected_previously = SELECTED_NOT;
 static char * selected_name;
 static size_t selected_name_allocated_len = 256; // Allocated length of selected_name.  Includes null terminator!
 
-#define PROMPT_MAXLEN 80
-static char prompt_buffer[PROMPT_MAXLEN];
-static size_t prompt_buffer_i = 0;
+static char * prompt_buffer;
+static size_t prompt_buffer_allocated_len = 256; // Allocated length of prompt_buffer.  Includes null terminator!
+#define PROMPT_BUFFER_LEN_INCREMENT 80
+static size_t prompt_buffer_i = 0; // Cursor location in prompt_buffer.
 
 static struct termios tcattr_old;
 static struct termios tcattr_raw;
@@ -913,7 +914,7 @@ static void handle_user_act(user_action act) {
         break;
     case USER_ACT_SEARCH:
         prompt = PROMPT_SEARCH;
-        memset(prompt_buffer, 0, sizeof(prompt_buffer));
+        memset(prompt_buffer, 0, sizeof(*prompt_buffer) * prompt_buffer_allocated_len);
         prompt_buffer_i = 0;
         break;
     case USER_ACT_SHELL:
@@ -945,6 +946,7 @@ int main(int argc, char ** argv) {
     if (optind < argc) start_dir = argv[optind];
 
     selected_name = malloc(sizeof(*selected_name) * selected_name_allocated_len);
+    prompt_buffer = malloc(sizeof(*prompt_buffer) * prompt_buffer_allocated_len);
 
     cd(start_dir);
     if (prompt) goto quit;
@@ -1055,10 +1057,17 @@ wait_for_user_act:
             prompt = PROMPT_NONE;
             break;
         default:
-            if (prompt_buffer_i >= PROMPT_MAXLEN - 1) break;
-            prompt_buffer[prompt_buffer_i++] = c;
-            prompt_buffer[prompt_buffer_i] = 0;
-            perform_search();
+            if (prompt_buffer_i >= prompt_buffer_allocated_len - 1) {
+                prompt_buffer_allocated_len += PROMPT_BUFFER_LEN_INCREMENT;
+                prompt_buffer = realloc(prompt_buffer, sizeof(*prompt_buffer) * prompt_buffer_allocated_len);
+            }
+
+            if (prompt_buffer) {
+                prompt_buffer[prompt_buffer_i++] = c;
+                prompt_buffer[prompt_buffer_i] = 0;
+                perform_search();
+            }
+
             break;
         }
     }
